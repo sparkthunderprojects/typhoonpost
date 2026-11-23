@@ -8,11 +8,18 @@ A full word processor inside Typhoonpost, next to Mail, Calendar, People and Tas
 
 Out of scope for this plan: spreadsheets and slides, AI writing features that send text to a server, and public web pages published from a document.
 
-## 2. Starting point
+## 2. Separate from the email composer
 
-The mail app already ships TipTap v3 (ProseMirror) with headings, lists, task lists, tables, images, links, colour, highlight, fonts, font size, alignment, sub/superscript and underline. `src/components/editor/RichTextEditor.tsx` (about 630 lines) wraps it for the composer. Documents reuses that editor and extends it; we do not switch editors.
+Documents is its own part of the product, not a bigger composer. The composer stays a light editor for writing messages and is not changed by this work.
 
-Reasons to stay on TipTap/ProseMirror: it is already in the bundle, the document model is a real schema (needed for DOCX export and comments), and Yjs binds to it for collaboration.
+- **Own module.** All code lives in `src/documents/` (editor, toolbar, page view, document list, import and export, storage). The composer's `RichTextEditor.tsx` is not imported, extended or modified.
+- **Own screen.** A "Docs" item in the app rail opens a full-screen workspace with its own document list and editor. Nothing opens inside the mail window.
+- **Own editor.** A separate TipTap instance with its own schema (pages, styles, comments, footnotes) built for documents. TipTap is already installed, so the only thing shared with the composer is the library and the existing crypto, not any editor code.
+- **Own data.** Separate tables, separate encrypted record kind, separate storage paths. Deleting or breaking a document cannot touch mail.
+- **Own bundle.** Loaded on demand, so mail does not get slower or larger for people who never open Docs.
+- **Only deliberate links to mail.** Attach a document to a message, save a message as a document, and send a document as a message. Each is an explicit action that passes a finished file or text across, never a shared editor.
+
+Reasons to keep TipTap/ProseMirror: it is already in the project, its document model is a real schema (needed for Word export and comments), and Yjs binds to it for collaboration.
 
 ## 3. Rules that do not bend
 
