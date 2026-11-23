@@ -32,7 +32,7 @@ Reasons to keep TipTap/ProseMirror: it is already in the project, its document m
 ## 4. Feature set
 
 ### Core writing (Phase 1)
-- Rich text: all formatting already in the editor, plus strikethrough, small caps, line spacing, paragraph spacing, indents, block quotes, code blocks, horizontal rule, special characters.
+- Rich text: the same formatting the composer offers, built again inside the Documents editor, plus strikethrough, small caps, line spacing, paragraph spacing, indents, block quotes, code blocks, horizontal rule, special characters.
 - Named styles: Normal, Title, Subtitle, Heading 1 to 6, Quote. Changing a style changes every use.
 - Lists: bulleted, numbered (multi-level, restart), checklists.
 - Tables: insert, resize, merge and split cells, header row, cell shading, borders.
