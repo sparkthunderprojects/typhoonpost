@@ -15,8 +15,10 @@ import {
   ChevronDown,
   Inbox,
   ShieldAlert,
+  Zap,
 } from 'lucide-react';
 import type { Email, FolderId, LabelId } from '@/types';
+import type { QuickStep } from '@/lib/quicksteps';
 import { FOLDER_NAMES } from '@/types';
 import { folderTree, usePrefs } from '@/lib/prefs';
 import { SnoozeMenu, type SnoozeOption } from '@/components/SnoozeMenu';
@@ -41,6 +43,7 @@ interface CommandBarProps {
   more: Omit<MoreMenuProps, 'hasEmail'>;
   onOpenMailSettings: () => void;
   onToggleLabel: (label: LabelId) => void;
+  onQuickStep: (step: QuickStep) => void;
 }
 
 const MOVE_TARGETS: { id: keyof typeof FOLDER_NAMES; Icon: typeof Inbox }[] = [
@@ -106,6 +109,7 @@ export function CommandBar({
   onSnooze,
   onFollowUp,
   onToggleLabel,
+  onQuickStep,
   more,
   onOpenMailSettings,
 }: CommandBarProps) {
@@ -114,6 +118,7 @@ export function CommandBar({
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [followOpen, setFollowOpen] = useState(false);
   const [labelOpen, setLabelOpen] = useState(false);
+  const [stepsOpen, setStepsOpen] = useState(false);
 
   const hasTarget = Boolean(email) || selectionCount > 0;
   const hasEmail = Boolean(email);
@@ -197,6 +202,23 @@ export function CommandBar({
           current={email?.labels ?? []}
           onToggle={onToggleLabel}
         />
+      </Menu>
+      <Menu>
+        <Btn onClick={() => setStepsOpen((v) => !v)} Icon={Zap} label="Quick steps" disabled={!hasTarget} chevron />
+        {stepsOpen && (
+          <>
+            <div className="fixed inset-0 z-40" onClick={() => setStepsOpen(false)} />
+            <div role="menu" aria-label="Quick steps" className="absolute left-0 top-full z-50 mt-1 w-64 overflow-hidden rounded-lg border border-line-strong bg-bg-subtle py-1 shadow-pop">
+              {prefs.quickSteps.length === 0 && <p className="px-3 py-2 text-sm text-fg-subtle">No quick steps yet. Make some in Mail settings.</p>}
+              {prefs.quickSteps.map((q) => (
+                <button key={q.id} role="menuitem" onClick={() => { setStepsOpen(false); onQuickStep(q); }} className="block w-full truncate px-3 py-2 text-left text-sm text-fg hover:bg-bg-muted">{q.name}</button>
+              ))}
+              <div className="border-t border-line">
+                <button role="menuitem" onClick={() => { setStepsOpen(false); onOpenMailSettings(); }} className="block w-full px-3 py-2 text-left text-sm text-accent hover:bg-bg-muted">Manage quick steps</button>
+              </div>
+            </div>
+          </>
+        )}
       </Menu>
       <MoreMenu hasEmail={hasEmail} {...more} />
       <ViewMenu />

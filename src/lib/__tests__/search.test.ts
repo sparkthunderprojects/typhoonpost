@@ -34,3 +34,46 @@ describe('search', () => {
     expect(taskMatches(t, ['visa'])).toBe(false);
   });
 });
+
+import { emailMatchesSearch, parseSearch, searchEmails } from '../search';
+import { ordered } from '../quicksteps';
+
+describe('search operators', () => {
+  const mk = (over: Record<string, unknown>) => ({
+    id: 'x', sender: 'Sam Lee', senderEmail: 'sam@acme.com', subject: 'Quarterly plan', preview: 'numbers inside', body: '<p>Budget attached</p>',
+    read: false, starred: false, folder: 'inbox', labels: [], attachments: [], createdAt: '2026-11-10T10:00:00Z', toAddresses: ['me@typhoonpost.com'], ...over,
+  }) as never;
+  const list = [
+    mk({ id: 'a' }),
+    mk({ id: 'b', sender: 'Jo', senderEmail: 'jo@other.org', subject: 'Lunch', read: true, starred: true, attachments: [{ name: 'menu.pdf' }], createdAt: '2026-10-01T10:00:00Z', labels: ['Work'] }),
+  ];
+  const ids = (q: string) => searchEmails(list as never, q).map((e) => e.id);
+  it('filters by sender, subject and recipient', () => {
+    expect(ids('from:acme')).toEqual(['a']);
+    expect(ids('subject:lunch')).toEqual(['b']);
+    expect(ids('to:typhoonpost')).toEqual(['a', 'b'].slice(0, 2).filter(() => true));
+  });
+  it('understands flags, attachments, dates and categories', () => {
+    expect(ids('is:unread')).toEqual(['a']);
+    expect(ids('is:flagged has:attachment')).toEqual(['b']);
+    expect(ids('before:2026-11-01')).toEqual(['b']);
+    expect(ids('after:2026-11-01')).toEqual(['a']);
+    expect(ids('label:work')).toEqual(['b']);
+  });
+  it('combines words, phrases and exclusions', () => {
+    expect(ids('"quarterly plan"')).toEqual(['a']);
+    expect(ids('budget -lunch')).toEqual(['a', 'b'].filter((i) => i === 'a'));
+    expect(ids('-quarterly')).toEqual(['b']);
+  });
+  it('reports the scope and treats unknown operators as text', () => {
+    expect(parseSearch('in:all report').folder).toBe('all');
+    expect(parseSearch('foo:bar').words).toEqual(['foo:bar']);
+    expect(emailMatchesSearch(list[0] as never, parseSearch(''))).toBe(true);
+  });
+});
+
+describe('quick step ordering', () => {
+  it('runs in-place steps first and only the last move', () => {
+    expect(ordered([{ type: 'archive' }, { type: 'markRead' }, { type: 'delete' }])).toEqual([{ type: 'markRead' }, { type: 'delete' }]);
+  });
+});

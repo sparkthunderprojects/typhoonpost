@@ -51,7 +51,17 @@ export interface Prefs {
   workEnd: number;
   workDays: number[];
   showWeekNumbers: boolean;
+  savedSearches: SavedSearch[];
+  templates: MailTemplate[];
+  quickSteps: QuickStep[];
+  /** Deleted Items older than this many days are removed for good, by this browser. 0 means never. */
+  autoEmptyDays: number;
+  /** Message id → when this browser first saw it in Deleted Items. Auto-empty counts days from here. */
+  trashedAt: Record<string, string>;
 }
+
+export interface SavedSearch { id: string; name: string; query: string }
+export interface MailTemplate { id: string; name: string; subject: string; body: string }
 
 export interface Subscription { id: string; name: string; url: string; color: string; visible: boolean }
 
@@ -59,6 +69,7 @@ export interface CalendarDef { id: string; name: string; color: string; visible:
 export const DEFAULT_CALENDAR_ID = 'default';
 
 import { DEFAULT_AUTOREPLY, type AutoReply, type MailRule } from '@/lib/rules';
+import { DEFAULT_QUICK_STEPS, type QuickStep } from '@/lib/quicksteps';
 
 export type ReadingPane = 'right' | 'bottom' | 'off';
 export type Density = 'comfortable' | 'compact';
@@ -89,6 +100,11 @@ export const DEFAULT_PREFS: Prefs = {
   workEnd: 17,
   workDays: [1, 2, 3, 4, 5],
   showWeekNumbers: false,
+  savedSearches: [],
+  templates: [],
+  quickSteps: DEFAULT_QUICK_STEPS,
+  autoEmptyDays: 0,
+  trashedAt: {},
 };
 
 let state: Prefs = DEFAULT_PREFS;
@@ -328,3 +344,25 @@ export const editSubscription = (id: string, patch: Partial<Omit<Subscription, '
 export const removeSubscription = (id: string) => updatePrefs((p) => ({ ...p, subscriptions: p.subscriptions.filter((x) => x.id !== id) }));
 export const setWorkingHours = (workStart: number, workEnd: number, workDays: number[]) => updatePrefs((p) => ({ ...p, workStart, workEnd, workDays }));
 export const setShowWeekNumbers = (showWeekNumbers: boolean) => updatePrefs((p) => ({ ...p, showWeekNumbers }));
+
+// ---- Saved searches, templates, quick steps, clean-up ----
+export const saveSearch = (name: string, query: string): string => {
+  const id = newId();
+  updatePrefs((p) => ({ ...p, savedSearches: [...p.savedSearches, { id, name: name.trim() || query.slice(0, 30), query: query.trim() }] }));
+  return id;
+};
+export const removeSearch = (id: string) => updatePrefs((p) => ({ ...p, savedSearches: p.savedSearches.filter((x) => x.id !== id) }));
+export const saveTemplate = (t: Omit<MailTemplate, 'id'> & { id?: string }): string => {
+  const id = t.id ?? newId();
+  updatePrefs((p) => {
+    const next = { id, name: t.name.trim() || 'Template', subject: t.subject, body: t.body };
+    return { ...p, templates: p.templates.some((x) => x.id === id) ? p.templates.map((x) => (x.id === id ? next : x)) : [...p.templates, next] };
+  });
+  return id;
+};
+export const removeTemplate = (id: string) => updatePrefs((p) => ({ ...p, templates: p.templates.filter((x) => x.id !== id) }));
+export const saveQuickStep = (q: QuickStep) =>
+  updatePrefs((p) => ({ ...p, quickSteps: p.quickSteps.some((x) => x.id === q.id) ? p.quickSteps.map((x) => (x.id === q.id ? q : x)) : [...p.quickSteps, q] }));
+export const removeQuickStep = (id: string) => updatePrefs((p) => ({ ...p, quickSteps: p.quickSteps.filter((x) => x.id !== id) }));
+export const setAutoEmptyDays = (autoEmptyDays: number) => updatePrefs((p) => ({ ...p, autoEmptyDays }));
+export const setTrashedAt = (trashedAt: Record<string, string>) => updatePrefs((p) => ({ ...p, trashedAt }));

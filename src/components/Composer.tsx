@@ -11,6 +11,8 @@ import {
   AlertCircle,
   ArrowDown,
   CalendarClock,
+  FileText,
+  LayoutTemplate,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { Contact, Importance } from '@/types';
@@ -18,6 +20,11 @@ import type { PayloadAttachment } from '@/lib/crypto/envelope';
 import { MAX_TOTAL_BYTES } from '@/lib/db';
 import { AttachmentIcon } from '@/components/AttachmentIcon';
 import { RecipientField, type Recipient } from '@/components/RecipientField';
+import { removeTemplate, saveTemplate, usePrefs } from '@/lib/prefs';
+import { listDocuments, openDocument } from '@/documents/store';
+import { docxBlob } from '@/documents/exporters';
+import { safeFileName } from '@/documents/format';
+import type { DocSummary } from '@/documents/types';
 import { RichTextEditor } from '@/components/editor/RichTextEditor';
 
 /** Everything the composer hands back for sending or saving as a draft. */
@@ -110,6 +117,9 @@ export function Composer({
   const [schedAt, setSchedAt] = useState('');
   const [attachments, setAttachments] = useState<PayloadAttachment[]>([]);
   const [uploading, setUploading] = useState(0);
+  const prefs = usePrefs();
+  const [menu, setMenu] = useState<null | 'templates' | 'docs'>(null);
+  const [docList, setDocList] = useState<DocSummary[] | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const appliedSession = useRef<number | undefined>(undefined);
   const dirtyRef = useRef(false);
@@ -239,6 +249,43 @@ export function Composer({
     if (fileInput.current) fileInput.current.value = '';
   };
 
+  const insertTemplate = (t: { subject: string; body: string }) => {
+    if (!subject.trim() && t.subject) setSubject(t.subject);
+    setBody((b) => (b.replace(/<[^>]*>/g, '').trim() ? `${b}${t.body}` : t.body));
+    editorKey.current += 1;
+    setMenu(null);
+  };
+
+  const saveAsTemplate = () => {
+    const text = body.replace(/<[^>]*>/g, '').trim();
+    if (!text && !subject.trim()) { onError('Write something first, then save it as a template'); return; }
+    const name = window.prompt('Name this template', subject.trim() || text.slice(0, 30));
+    if (name === null) return;
+    saveTemplate({ name, subject, body });
+    setMenu(null);
+  };
+
+  const openDocs = async () => {
+    setMenu((m) => (m === 'docs' ? null : 'docs'));
+    try { setDocList((await listDocuments()).filter((d) => !d.trashedAt && !d.undecryptable)); } catch { setDocList([]); }
+  };
+
+  const attachDoc = async (d: DocSummary) => {
+    setMenu(null);
+    setUploading((n) => n + 1);
+    try {
+      const { body: docBody } = await openDocument(d.id);
+      const blob = await docxBlob(d.title, docBody.doc, docBody.page?.size ?? 'a4');
+      const file = new File([blob], `${safeFileName(d.title)}.docx`, { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+      const att = await onUploadFile(file);
+      setAttachments((prev) => [...prev, att]);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : `Could not attach ${d.title}`);
+    } finally {
+      setUploading((n) => n - 1);
+    }
+  };
+
   const removeAttachment = (a: PayloadAttachment) => {
     setAttachments((prev) => prev.filter((x) => x !== a));
     if (a.file) onRemoveFile(a.file.id);
@@ -256,6 +303,7 @@ export function Composer({
     baseline.current = fingerprint('', '', '', 'normal', '', '', 0);
     dirtyRef.current = false;
     onDiscard();
+    onClose();
   };
 
   // ---- Minimized: small bottom-right tab ----
@@ -407,6 +455,46 @@ export function Composer({
         >
           <Paperclip className="h-4 w-4" />
         </button>
+        <div className="relative">
+          <button onClick={openDocs} className="rounded-lg p-1.5 text-fg-subtle transition-colors hover:bg-bg hover:text-fg" title="Attach a Doc" aria-label="Attach a Doc" aria-haspopup="menu" aria-expanded={menu === 'docs'}>
+            <FileText className="h-4 w-4" />
+          </button>
+          {menu === 'docs' && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setMenu(null)} />
+              <div role="menu" aria-label="Attach a Doc" className="absolute bottom-full left-0 z-50 mb-1 max-h-64 w-64 overflow-y-auto rounded-lg border border-line-strong bg-bg-subtle py-1 shadow-pop">
+                <p className="px-3 py-1.5 text-xs text-fg-muted">Sent as a Word file</p>
+                {docList === null && <p className="px-3 py-2 text-sm text-fg-subtle">Loading…</p>}
+                {docList?.length === 0 && <p className="px-3 py-2 text-sm text-fg-subtle">No Docs yet.</p>}
+                {docList?.map((d) => (
+                  <button key={d.id} role="menuitem" onClick={() => attachDoc(d)} className="block w-full truncate px-3 py-2 text-left text-sm text-fg hover:bg-bg-muted">{d.title || 'Untitled'}</button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+        <div className="relative">
+          <button onClick={() => setMenu((m) => (m === 'templates' ? null : 'templates'))} className="rounded-lg p-1.5 text-fg-subtle transition-colors hover:bg-bg hover:text-fg" title="Templates" aria-label="Templates" aria-haspopup="menu" aria-expanded={menu === 'templates'}>
+            <LayoutTemplate className="h-4 w-4" />
+          </button>
+          {menu === 'templates' && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setMenu(null)} />
+              <div role="menu" aria-label="Templates" className="absolute bottom-full left-0 z-50 mb-1 max-h-72 w-64 overflow-y-auto rounded-lg border border-line-strong bg-bg-subtle py-1 shadow-pop">
+                {prefs.templates.length === 0 && <p className="px-3 py-2 text-sm text-fg-subtle">No templates yet. Write a message you reuse, then save it here.</p>}
+                {prefs.templates.map((t) => (
+                  <div key={t.id} className="group flex items-center hover:bg-bg-muted">
+                    <button role="menuitem" onClick={() => insertTemplate(t)} className="min-w-0 flex-1 truncate px-3 py-2 text-left text-sm text-fg">{t.name}</button>
+                    <button aria-label={`Delete template ${t.name}`} onClick={() => removeTemplate(t.id)} className="px-2 text-fg-subtle opacity-0 hover:text-danger focus:opacity-100 group-hover:opacity-100"><X className="h-3.5 w-3.5" /></button>
+                  </div>
+                ))}
+                <div className="border-t border-line">
+                  <button role="menuitem" onClick={saveAsTemplate} className="block w-full px-3 py-2 text-left text-sm text-accent hover:bg-bg-muted">Save this message as a template</button>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
         <button
           onClick={() => setImportance((v) => (v === 'high' ? 'normal' : 'high'))}
           className={`rounded-lg p-1.5 transition-colors hover:bg-bg ${importance === 'high' ? 'text-danger' : 'text-fg-subtle hover:text-fg'}`}

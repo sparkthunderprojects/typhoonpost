@@ -61,9 +61,14 @@ function imageSizes(doc: PMNode): Promise<Map<string, { w: number; h: number }>>
   ).then(() => map);
 }
 
-export async function exportDocx(title: string, doc: PMNode, size: PageSize) {
+/** The Word file for a document, without saving it anywhere. Used to attach a Doc to a message. */
+export async function docxBlob(title: string, doc: PMNode, size: PageSize): Promise<Blob> {
   const [{ buildDocx }, sizes] = await Promise.all([import('./exportDocx'), imageSizes(doc)]);
-  const blob = await buildDocx(title, doc, size, (src) => sizes.get(src) ?? { w: 400, h: 300 });
+  return buildDocx(title, doc, size, (src) => sizes.get(src) ?? { w: 400, h: 300 });
+}
+
+export async function exportDocx(title: string, doc: PMNode, size: PageSize) {
+  const blob = await docxBlob(title, doc, size);
   download(blob, `${safeFileName(title)}.docx`);
 }
 

@@ -1,10 +1,10 @@
 import { useState, type ReactNode } from 'react';
 import {
   Inbox, Flag, Send, FileText, Archive, Trash2, ShieldAlert, Clock, Users, ChevronDown, ChevronRight,
-  Folder, FolderPlus, MoreHorizontal, Plus, Pencil,
+  Folder, FolderPlus, MoreHorizontal, Plus, Pencil, Search, X,
 } from 'lucide-react';
 import type { BuiltInFolderId, FolderId, LabelId, AppView } from '@/types';
-import { addCategory, addFolder, categoryDefs, descendantIds, editCategory, folderName, folderTree, moveFolderTo, nudgeFolder, removeCategory, removeFolder, renameFolder, toggleFavourite, usePrefs } from '@/lib/prefs';
+import { addCategory, addFolder, categoryDefs, descendantIds, editCategory, folderName, folderTree, moveFolderTo, nudgeFolder, removeCategory, removeFolder, removeSearch, renameFolder, toggleFavourite, usePrefs } from '@/lib/prefs';
 import { FOLDER_MIME, isFolderDrag, isMailDrag, readMailDrag } from '@/lib/dnd';
 
 interface SidebarProps {
@@ -22,6 +22,9 @@ interface SidebarProps {
   userEmail: string;
   contactCount: number;
   eventCount: number;
+  activeSearchId: string | null;
+  onSearchSelect: (id: string) => void;
+  searchCounts: Record<string, number>;
 }
 
 const ICONS: Record<BuiltInFolderId, typeof Inbox> = {
@@ -72,7 +75,7 @@ function NameBox({ initial, placeholder, onDone, onCancel }: { initial?: string;
 
 export function Sidebar({
   activeFolder, onFolderChange, counts, activeLabel, onLabelToggle, labelCounts, onDropMail, onDropLabel, onFolderDeleted,
-  view, taskCount, userEmail, contactCount, eventCount,
+  view, taskCount, userEmail, contactCount, eventCount, activeSearchId, onSearchSelect, searchCounts,
 }: SidebarProps) {
   const prefs = usePrefs();
   const [dropTarget, setDropTarget] = useState<string | null>(null);
@@ -201,6 +204,34 @@ export function Sidebar({
               aria-hidden
             />
           </Section>
+          {prefs.savedSearches.length > 0 && (
+            <Section title="Search folders">
+              {prefs.savedSearches.map((q) => {
+                const active = activeSearchId === q.id;
+                const n = searchCounts[q.id] ?? 0;
+                return (
+                  <li key={q.id} className="group relative">
+                    <button
+                      onClick={() => onSearchSelect(q.id)}
+                      aria-current={active ? 'page' : undefined}
+                      title={q.query}
+                      className={`relative flex w-full items-center gap-2.5 rounded py-1.5 pl-6 pr-8 text-sm transition-colors ${active ? 'bg-accent-soft font-semibold text-fg' : 'text-fg hover:bg-bg-muted'}`}
+                    >
+                      {active && <span className="absolute left-0 top-1.5 h-[calc(100%-12px)] w-[3px] rounded-r bg-accent" />}
+                      <Search className={`h-4 w-4 shrink-0 ${active ? 'text-accent' : 'text-fg-muted'}`} />
+                      <span className="flex-1 truncate text-left">{q.name}</span>
+                      {n > 0 && <span className="text-xs font-semibold text-accent">{n}</span>}
+                    </button>
+                    <button
+                      aria-label={`Remove search folder ${q.name}`}
+                      onClick={() => { if (window.confirm(`Remove the search folder "${q.name}"? Your messages are not affected.`)) { removeSearch(q.id); if (active) onFolderChange('inbox'); } }}
+                      className="absolute right-1 top-1 rounded p-1 text-fg-subtle opacity-0 hover:bg-bg-muted hover:text-fg focus:opacity-100 group-hover:opacity-100"
+                    ><X className="h-4 w-4" /></button>
+                  </li>
+                );
+              })}
+            </Section>
+          )}
           <Section
             title="Categories"
             action={<button aria-label="New category" title="New category" onClick={() => setNaming({ kind: 'category' })} className="rounded p-1 text-fg-muted hover:bg-bg-muted hover:text-fg"><Plus className="h-4 w-4" /></button>}

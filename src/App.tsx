@@ -28,7 +28,10 @@ import { contactName, EVENT_COLORS } from '@/types';
 import {
   addSender, categoryDefs, folderName, folderTree, getPrefs, loadPrefs, markAutoReplied, newId, resetPrefs, saveRule, setIgnored,
   setRulesCheckedAt, setScheduled, setSenderFocus, usePrefs,
+  saveSearch, setTrashedAt,
 } from '@/lib/prefs';
+import { messageToDoc } from '@/lib/mailToDoc';
+import { ordered, planAutoEmpty, type QuickStep } from '@/lib/quicksteps';
 import { decide, emptyRule, listMatches, shouldAutoReply, type RulePatch } from '@/lib/rules';
 import { MailSettingsDialog } from '@/components/MailSettingsDialog';
 import { useTheme } from '@/hooks/useTheme';
@@ -66,7 +69,10 @@ import {
   downloadAttachment,
   lookupPublicKeys,
 } from '@/lib/db';
-import { contactMatches, emailMatches, eventMatches, filterBy } from '@/lib/search';
+import { contactMatches, emailMatchesSearch, eventMatches, filterBy, parseSearch, searchEmails } from '@/lib/search';
+
+/** Words people type after in: that mean one of the built-in folders. */
+const FOLDER_ALIASES: Record<string, string> = { deleted: 'trash', bin: 'trash', junk: 'spam', sent: 'sent', drafts: 'drafts', inbox: 'inbox', archive: 'archive', all: 'all' };
 import { TasksView } from '@/components/TasksView';
 const DocsView = lazy(() => import('@/documents/DocsView'));
 import { migrateLegacyData, type MigrationResult } from '@/lib/migrate';
@@ -134,6 +140,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
   const [filter, setFilter] = useState<FilterTab>('all');
   const [category, setCategory] = useState<Category>('primary');
   const [query, setQuery] = useState('');
+  const [activeSearchId, setActiveSearchId] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [readerOpen, setReaderOpen] = useState(false);
   const [mailSettingsOpen, setMailSettingsOpen] = useState(false);
@@ -251,25 +258,47 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
   );
 
   // ---- Derived mail list ----
+  const activeSearch = prefs.savedSearches.find((q) => q.id === activeSearchId) ?? null;
   const visibleEmails = useMemo(() => {
     let list = emails;
-    if (activeLabel) {
+    const parsed = parseSearch(activeSearch ? activeSearch.query : query);
+    const scope = parsed.folder ? (FOLDER_ALIASES[parsed.folder] ?? parsed.folder) : null;
+    if (activeSearch) {
+      // A search folder looks wherever its own query says, and nowhere else.
+      if (scope && scope !== 'all') list = list.filter((e) => e.folder === scope);
+      else list = list.filter((e) => e.folder !== 'trash' && e.folder !== 'spam');
+    } else if (scope === 'all') {
+      // Searching "in:all" leaves the folder being viewed behind, but still skips Deleted and Junk.
+      list = list.filter((e) => e.folder !== 'trash' && e.folder !== 'spam');
+    } else if (scope) {
+      list = list.filter((e) => e.folder === scope);
+    } else if (activeLabel) {
       list = list.filter((e) => e.labels.includes(activeLabel));
     } else if (activeFolder === 'starred') {
       list = list.filter((e) => e.starred && e.folder !== 'trash' && e.folder !== 'spam');
     } else {
       list = list.filter((e) => e.folder === activeFolder);
     }
-    if (activeFolder === 'inbox' && !activeLabel) {
+    if (activeFolder === 'inbox' && !activeLabel && !activeSearch && !scope) {
       // Focused = primary; Other = promotions + social
       list = list.filter((e) => isFocused(e, prefs.senderFocus) === (category === 'primary'));
     }
     if (filter === 'unread') list = list.filter((e) => !e.read);
     if (filter === 'starred') list = list.filter((e) => e.starred);
-    list = filterBy(list, query, emailMatches);
+    list = searchEmails(list, activeSearch ? activeSearch.query : query);
     if (list.some((e) => e.pinned)) list = [...list.filter((e) => e.pinned), ...list.filter((e) => !e.pinned)];
     return list;
-  }, [emails, activeFolder, activeLabel, category, filter, query, prefs.senderFocus]);
+  }, [emails, activeFolder, activeLabel, activeSearch, category, filter, query, prefs.senderFocus]);
+
+  const searchCounts = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const q of prefs.savedSearches) {
+      const p = parseSearch(q.query);
+      const scope = p.folder ? (FOLDER_ALIASES[p.folder] ?? p.folder) : 'all';
+      out[q.id] = emails.filter((e) => !e.read && (scope === 'all' ? e.folder !== 'trash' && e.folder !== 'spam' : e.folder === scope) && emailMatchesSearch(e, p)).length;
+    }
+    return out;
+  }, [emails, prefs.savedSearches]);
 
   const activeEmail = useMemo(
     () => emails.find((e) => e.id === activeId) ?? null,
@@ -1476,6 +1505,105 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
     [userId, push],
   );
 
+  // ---- Quick Steps, mark all read, empty Deleted Items ----
+  const runQuickStep = useCallback(
+    (step: QuickStep) => {
+      const ids = selectedIds.size > 0 ? Array.from(selectedIds) : activeId ? [activeId] : [];
+      if (ids.length === 0) return;
+      const targets = emails.filter((e) => ids.includes(e.id));
+      const acts = ordered(step.actions);
+      for (const act of acts) {
+        switch (act.type) {
+          case 'markRead': case 'markUnread': {
+            const read = act.type === 'markRead';
+            setEmails((prev) => prev.map((e) => (ids.includes(e.id) ? { ...e, read } : e)));
+            updateEmailsBulk(ids, { read }).catch(() => {});
+            break;
+          }
+          case 'flag': case 'unflag': {
+            const starred = act.type === 'flag';
+            setEmails((prev) => prev.map((e) => (ids.includes(e.id) ? { ...e, starred } : e)));
+            updateEmailsBulk(ids, { starred }).catch(() => {});
+            break;
+          }
+          case 'category':
+            for (const t of targets) {
+              if (t.labels.includes(act.label)) continue;
+              const labels = [...t.labels, act.label];
+              setEmails((prev) => prev.map((e) => (e.id === t.id ? { ...e, labels } : e)));
+              dbUpdateEmail(t.id, { labels }).catch(() => {});
+            }
+            break;
+          case 'task':
+            for (const t of targets) addTask(t.subject || '(No subject)', { due: null, important: false });
+            break;
+          case 'move': case 'archive': case 'delete': {
+            const folder: FolderId = act.type === 'move' ? act.folder : act.type === 'archive' ? 'archive' : 'trash';
+            setEmails((prev) => prev.map((e) => (ids.includes(e.id) ? { ...e, folder, snoozedUntil: undefined } : e)));
+            updateEmailsBulk(ids, { folder }).catch(() => {});
+            break;
+          }
+        }
+      }
+      setSelectedIds(new Set());
+      push(`${step.name}: ${targets.length} message${targets.length === 1 ? '' : 's'}`);
+    },
+    [selectedIds, activeId, emails, push, addTask],
+  );
+
+  const markAllRead = useCallback(() => {
+    // The whole folder, not only the Focused or Other tab being looked at; a search or category narrows it.
+    const pool = activeSearch || activeLabel || query.trim() ? visibleEmails : activeFolder === 'starred' ? emails.filter((e) => e.starred && e.folder !== 'trash' && e.folder !== 'spam') : emails.filter((e) => e.folder === activeFolder);
+    const ids = pool.filter((e) => !e.read).map((e) => e.id);
+    if (ids.length === 0) { push('Nothing to mark as read'); return; }
+    setEmails((prev) => prev.map((e) => (ids.includes(e.id) ? { ...e, read: true } : e)));
+    updateEmailsBulk(ids, { read: true }).catch(() => {});
+    push(`Marked ${ids.length} as read`, 'Undo', () => {
+      setEmails((prev) => prev.map((e) => (ids.includes(e.id) ? { ...e, read: false } : e)));
+      updateEmailsBulk(ids, { read: false }).catch(() => {});
+    });
+  }, [visibleEmails, emails, activeFolder, activeLabel, activeSearch, query, push]);
+
+  const emptyDeleted = useCallback(async () => {
+    const ids = emails.filter((e) => e.folder === 'trash').map((e) => e.id);
+    if (ids.length === 0) { push('Deleted Items is already empty'); return; }
+    if (!window.confirm(`Permanently delete ${ids.length} message${ids.length === 1 ? '' : 's'}? This cannot be undone.`)) return;
+    await Promise.all(ids.map((id) => deleteEmailRow(id).catch(() => {})));
+    setEmails((prev) => prev.filter((e) => !ids.includes(e.id)));
+    setActiveId((cur) => (cur && ids.includes(cur) ? null : cur));
+    push(`Deleted ${ids.length} for good`);
+  }, [emails, push]);
+
+  // Auto-empty: runs here, in the browser, because the server cannot see which messages are in Deleted Items.
+  const autoEmptyRan = useRef(false);
+  useEffect(() => {
+    if (dataLoading || autoEmptyRan.current) return;
+    autoEmptyRan.current = true;
+    const trash = emails.filter((e) => e.folder === 'trash').map((e) => e.id);
+    const { next, remove } = planAutoEmpty(trash, prefs.trashedAt, prefs.autoEmptyDays);
+    if (JSON.stringify(next) !== JSON.stringify(prefs.trashedAt)) setTrashedAt(next);
+    if (remove.length) {
+      Promise.all(remove.map((id) => deleteEmailRow(id).catch(() => {}))).then(() => {
+        setEmails((prev) => prev.filter((e) => !remove.includes(e.id)));
+        push(`Removed ${remove.length} old message${remove.length === 1 ? '' : 's'} from Deleted Items`);
+      });
+    }
+  }, [dataLoading, emails, prefs.trashedAt, prefs.autoEmptyDays, push]);
+
+  const saveAsDoc = useCallback(
+    async (email: Email) => {
+      try {
+        const { createDocument } = await import('@/documents/store');
+        const { title, doc } = messageToDoc(email);
+        await createDocument(userId, title, doc);
+        push(`Saved “${title.slice(0, 40)}” as a Doc`);
+      } catch {
+        push('Could not save as a Doc');
+      }
+    },
+    [userId, push],
+  );
+
   const updateTaskItem = useCallback(
     (task: Task) => {
       const before = tasks.find((t) => t.id === task.id);
@@ -1592,6 +1720,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
   // ---- Folder / label switching ----
   const handleFolderChange = (f: FolderId) => {
     setView('mail');
+    setActiveSearchId(null);
     setActiveFolder(f);
     setActiveLabel(null);
     setActiveId(null);
@@ -1602,6 +1731,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
 
   const handleLabelToggle = (l: LabelId) => {
     setView('mail');
+    setActiveSearchId(null);
     setActiveLabel((prev) => (prev === l ? null : l));
     setActiveId(null);
     setFilter('all');
@@ -1716,6 +1846,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
         onOpenShortcuts={() => setShortcutsOpen(true)}
         onOpenPalette={() => setPaletteOpen(true)}
         userEmail={userEmail}
+        onSaveSearch={view === 'mail' ? (q) => { const id = saveSearch('', q); setActiveSearchId(id); setQuery(''); } : undefined}
       />
 
       <div className="flex min-h-0 flex-1">
@@ -1730,6 +1861,9 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
         onDropMail={moveMany}
         onDropLabel={addLabelMany}
         onFolderDeleted={folderDeleted}
+        activeSearchId={activeSearchId}
+        onSearchSelect={(id) => { setView('mail'); setActiveSearchId(id); setActiveLabel(null); setActiveId(null); setFilter('all'); setQuery(''); setListCollapsed(false); }}
+        searchCounts={searchCounts}
         view={view}
         userEmail={userEmail}
         contactCount={contacts.length}
@@ -1755,6 +1889,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
             onFollowUp={(day) => activeId && setFollowUp(activeId, day)}
             onOpenMailSettings={() => setMailSettingsOpen(true)}
             onToggleLabel={(label) => activeId && toggleLabel(activeId, label)}
+            onQuickStep={runQuickStep}
             more={{
               ignored: activeIgnored,
               focus: activeFocus,
@@ -1768,6 +1903,13 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
               onSafe: () => activeEmail && markSafe(activeEmail),
               onSweep: (kind) => activeEmail && sweepSender(activeEmail, kind),
               onCleanUp: () => activeEmail && cleanUpConversation(activeEmail),
+              onCreateTask: () => activeEmail && addTask(activeEmail.subject || '(No subject)', { due: null, important: false }),
+              onCreateEvent: () => activeEmail && mailToCalendar(activeEmail.id, new Date(Math.ceil(Date.now() / 3600000) * 3600000)),
+              onAddSender: () => activeEmail && addSenderToContacts(activeEmail),
+              senderKnown: activeEmail ? contacts.some((c) => c.email.toLowerCase() === activeEmail.senderEmail.toLowerCase()) : false,
+              onSaveAsDoc: () => activeEmail && saveAsDoc(activeEmail),
+              onMarkAllRead: markAllRead,
+              onEmptyDeleted: emptyDeleted,
               onSenderFocus: (choice) => {
                 if (!activeEmail) return;
                 setSenderFocus(activeEmail.senderEmail, choice);
@@ -1795,7 +1937,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
             onQuickMarkUnread={markUnread}
             onTogglePin={togglePin}
             onQuickSnooze={handleQuickSnooze}
-            folderName={activeLabel ? `Category: ${categoryDefs(prefs).find((d) => d.id === activeLabel)?.name ?? 'Category'}` : folderName(activeFolder, prefs)}
+            folderName={activeSearch ? activeSearch.name : activeLabel ? `Category: ${categoryDefs(prefs).find((d) => d.id === activeLabel)?.name ?? 'Category'}` : folderName(activeFolder, prefs)}
             onClearSelection={() => setSelectedIds(new Set())}
             onSelectAll={selectAll}
             onBulkMarkRead={bulkMarkRead}

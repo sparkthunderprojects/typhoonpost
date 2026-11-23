@@ -2,14 +2,17 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { Plus, Trash2, X } from 'lucide-react';
 import { useState } from 'react';
 import {
-  addSender, categoryDefs, folderTree, newId, removeRule, removeSender, saveRule, setAutoReply, setUndoSendSeconds, usePrefs,
+  addSender, categoryDefs, folderTree, newId, removeQuickStep, removeRule, removeSender, removeTemplate, saveQuickStep, saveRule, saveTemplate, setAutoEmptyDays, setAutoReply, setUndoSendSeconds, usePrefs,
 } from '@/lib/prefs';
 import { emptyRule, type MailRule } from '@/lib/rules';
+import { ACTION_LABELS, type QuickAction, type QuickStep } from '@/lib/quicksteps';
 
-type Tab = 'sending' | 'rules' | 'senders' | 'autoreply';
+type Tab = 'sending' | 'rules' | 'quicksteps' | 'templates' | 'senders' | 'autoreply';
 const TABS: { id: Tab; label: string }[] = [
   { id: 'sending', label: 'Sending' },
   { id: 'rules', label: 'Rules' },
+  { id: 'quicksteps', label: 'Quick steps' },
+  { id: 'templates', label: 'Templates' },
   { id: 'senders', label: 'Blocked and safe' },
   { id: 'autoreply', label: 'Automatic replies' },
 ];
@@ -68,6 +71,8 @@ export function MailSettingsDialog({ open, onClose, onRunRules }: Props) {
             <div className="flex-1 overflow-y-auto p-4 scrollbar-thin">
               {tab === 'sending' && <SendingTab />}
               {tab === 'rules' && <RulesTab onRun={onRunRules} />}
+              {tab === 'quicksteps' && <QuickStepsTab />}
+              {tab === 'templates' && <TemplatesTab />}
               {tab === 'senders' && <SendersTab />}
               {tab === 'autoreply' && <AutoReplyTab />}
             </div>
@@ -96,6 +101,16 @@ function SendingTab() {
           <option value={30}>Hold for 30 seconds</option>
         </select>
         <p className="mt-1.5 text-xs text-fg-subtle">While a message is held you can take it back. If you close Typhoonpost during that time it is not sent, and stays in Drafts.</p>
+      </div>
+      <div>
+        <label htmlFor="auto-empty" className={label}>Empty Deleted Items automatically</label>
+        <select id="auto-empty" value={prefs.autoEmptyDays} onChange={(e) => setAutoEmptyDays(Number(e.target.value))} className={field}>
+          <option value={0}>Never</option>
+          <option value={7}>After 7 days</option>
+          <option value={30}>After 30 days</option>
+          <option value={90}>After 90 days</option>
+        </select>
+        <p className="mt-1.5 text-xs text-fg-subtle">Messages are removed for good, from this browser, when Typhoonpost opens. Days count from when this browser first saw the message in Deleted Items.</p>
       </div>
       <Note>
         Scheduled messages wait in Drafts, encrypted like everything else. Typhoonpost cannot read them, so it cannot send them for you:
@@ -258,6 +273,78 @@ function AutoReplyTab() {
         Automatic replies go only to people on Typhoonpost, and only while Typhoonpost is open in a browser, because the server cannot read your mail to answer it.
         Each person gets one every few days at most. Replies to machines, newsletters and other automatic replies are skipped.
       </Note>
+    </div>
+  );
+}
+
+const ACTION_TYPES = Object.keys(ACTION_LABELS) as QuickAction['type'][];
+
+function blankAction(type: QuickAction['type']): QuickAction {
+  if (type === 'move') return { type, folder: 'archive' };
+  if (type === 'category') return { type, label: 'work' };
+  return { type } as QuickAction;
+}
+
+function QuickStepsTab() {
+  const prefs = usePrefs();
+  const cats = categoryDefs(prefs);
+  const folders = folderTree(prefs);
+  const patch = (q: QuickStep, actions: QuickAction[]) => saveQuickStep({ ...q, actions });
+  return (
+    <div className="space-y-4">
+      <p className="text-xs leading-relaxed text-fg-subtle">A quick step does several things to a message in one click, from Quick steps in the toolbar. They run in this browser on the messages you have selected.</p>
+      {prefs.quickSteps.map((q) => (
+        <div key={q.id} className="rounded-lg border border-line p-3" data-testid="quick-step">
+          <div className="flex items-center gap-2">
+            <input aria-label="Quick step name" className={field} value={q.name} onChange={(e) => saveQuickStep({ ...q, name: e.target.value })} />
+            <button aria-label={`Delete ${q.name}`} onClick={() => removeQuickStep(q.id)} className="rounded p-1.5 text-fg-subtle hover:bg-danger/10 hover:text-danger"><Trash2 className="h-4 w-4" /></button>
+          </div>
+          <ul className="mt-2 space-y-1.5">
+            {q.actions.map((a, i) => (
+              <li key={i} className="flex items-center gap-2">
+                <select aria-label="Action" className={field} value={a.type} onChange={(e) => patch(q, q.actions.map((x, j) => (j === i ? blankAction(e.target.value as QuickAction['type']) : x)))}>
+                  {ACTION_TYPES.map((t) => <option key={t} value={t}>{ACTION_LABELS[t]}</option>)}
+                </select>
+                {a.type === 'move' && (
+                  <select aria-label="Folder" className={field} value={a.folder} onChange={(e) => patch(q, q.actions.map((x, j) => (j === i ? { type: 'move', folder: e.target.value as never } : x)))}>
+                    <option value="inbox">Inbox</option>
+                    <option value="archive">Archive</option>
+                    <option value="spam">Junk</option>
+                    {folders.map(({ folder }) => <option key={folder.id} value={`f:${folder.id}`}>{folder.name}</option>)}
+                  </select>
+                )}
+                {a.type === 'category' && (
+                  <select aria-label="Category" className={field} value={a.label} onChange={(e) => patch(q, q.actions.map((x, j) => (j === i ? { type: 'category', label: e.target.value } : x)))}>
+                    {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                )}
+                <button aria-label="Remove action" onClick={() => patch(q, q.actions.filter((_, j) => j !== i))} className="rounded p-1.5 text-fg-subtle hover:text-danger"><X className="h-4 w-4" /></button>
+              </li>
+            ))}
+          </ul>
+          <button onClick={() => patch(q, [...q.actions, blankAction('markRead')])} className="mt-2 flex items-center gap-1 text-sm text-accent"><Plus className="h-3.5 w-3.5" />Add an action</button>
+        </div>
+      ))}
+      <button onClick={() => saveQuickStep({ id: newId(), name: 'New quick step', actions: [{ type: 'markRead' }] })} className="flex items-center gap-1 rounded bg-accent px-3 py-1.5 text-sm font-medium text-accent-fg"><Plus className="h-4 w-4" />New quick step</button>
+    </div>
+  );
+}
+
+function TemplatesTab() {
+  const prefs = usePrefs();
+  return (
+    <div className="space-y-4">
+      <p className="text-xs leading-relaxed text-fg-subtle">Templates are text you reuse. Save one from the Templates button in a new message. They are encrypted like the rest of your settings.</p>
+      {prefs.templates.length === 0 && <p className="text-sm text-fg-muted">No templates yet.</p>}
+      {prefs.templates.map((t) => (
+        <div key={t.id} className="rounded-lg border border-line p-3" data-testid="template">
+          <div className="flex items-center gap-2">
+            <input aria-label="Template name" className={field} value={t.name} onChange={(e) => saveTemplate({ ...t, name: e.target.value })} />
+            <button aria-label={`Delete ${t.name}`} onClick={() => removeTemplate(t.id)} className="rounded p-1.5 text-fg-subtle hover:bg-danger/10 hover:text-danger"><Trash2 className="h-4 w-4" /></button>
+          </div>
+          <input aria-label="Template subject" placeholder="Subject (optional)" className={`${field} mt-2`} value={t.subject} onChange={(e) => saveTemplate({ ...t, subject: e.target.value })} />
+        </div>
+      ))}
     </div>
   );
 }

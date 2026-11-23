@@ -95,11 +95,19 @@ export interface MoreMenuProps {
   onSafe: () => void;
   onSweep: (kind: 'archive' | 'delete') => void;
   onCleanUp: () => void;
+  onCreateTask: () => void;
+  onCreateEvent: () => void;
+  onAddSender: () => void;
+  senderKnown: boolean;
+  onSaveAsDoc: () => void;
+  onMarkAllRead: () => void;
+  onEmptyDeleted: () => void;
 }
 
 export function MoreMenu({
   hasEmail, ignored, focus, inFocused, onPrint, onSaveAs, onIgnore, onSenderFocus,
   senderBlocked, senderSafe, onBlock, onSafe, onSweep, onCleanUp,
+  onCreateTask, onCreateEvent, onAddSender, senderKnown, onSaveAsDoc, onMarkAllRead, onEmptyDeleted,
 }: MoreMenuProps) {
   const [open, setOpen] = useState(false);
   const run = (fn: () => void) => () => {
@@ -110,7 +118,6 @@ export function MoreMenu({
     <div className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        disabled={!hasEmail}
         title="More actions"
         aria-label="More actions"
         aria-haspopup="menu"
@@ -121,24 +128,40 @@ export function MoreMenu({
       </button>
       {open && (
         <Panel onClose={() => setOpen(false)} label="More actions">
-          <Item label="Print" onClick={run(onPrint)} />
-          <Item label="Save as file (.eml)" onClick={run(onSaveAs)} />
-          <div className="my-1 border-t border-line" />
-          <Item label={ignored ? 'Stop ignoring conversation' : 'Ignore conversation'} onClick={run(onIgnore)} />
-          <div className="my-1 border-t border-line" />
-          {inFocused ? (
-            <Item label="Always move this sender to Other" onClick={run(() => onSenderFocus('other'))} />
-          ) : (
-            <Item label="Always move this sender to Focused" onClick={run(() => onSenderFocus('focused'))} />
+          {hasEmail && (
+            <>
+              <Item label="Print" onClick={run(onPrint)} />
+              <Item label="Save as file (.eml)" onClick={run(onSaveAs)} />
+              <Item label="Save as a Doc" onClick={run(onSaveAsDoc)} />
+              <div className="my-1 border-t border-line" />
+              <Item label="Create a task" onClick={run(onCreateTask)} />
+              <Item label="Create an event" onClick={run(onCreateEvent)} />
+              {!senderKnown && <Item label="Add sender to People" onClick={run(onAddSender)} />}
+              <div className="my-1 border-t border-line" />
+            </>
           )}
-          {focus && <Item label="Go back to automatic sorting" onClick={run(() => onSenderFocus(null))} />}
-          <div className="my-1 border-t border-line" />
-          <Item label="Clean up conversation (keep the newest)" onClick={run(onCleanUp)} />
-          <Item label="Sweep: archive all from this sender" onClick={run(() => onSweep('archive'))} />
-          <Item label="Sweep: delete all from this sender, and future mail" onClick={run(() => onSweep('delete'))} />
-          <div className="my-1 border-t border-line" />
-          {!senderBlocked && <Item label="Block sender" onClick={run(onBlock)} />}
-          {!senderSafe && <Item label={senderBlocked ? 'Unblock and mark as safe' : 'Mark sender as safe'} onClick={run(onSafe)} />}
+          {hasEmail && (
+            <>
+              <Item label={ignored ? 'Stop ignoring conversation' : 'Ignore conversation'} onClick={run(onIgnore)} />
+              <div className="my-1 border-t border-line" />
+              {inFocused ? (
+                <Item label="Always move this sender to Other" onClick={run(() => onSenderFocus('other'))} />
+              ) : (
+                <Item label="Always move this sender to Focused" onClick={run(() => onSenderFocus('focused'))} />
+              )}
+              {focus && <Item label="Go back to automatic sorting" onClick={run(() => onSenderFocus(null))} />}
+              <div className="my-1 border-t border-line" />
+              <Item label="Clean up conversation (keep the newest)" onClick={run(onCleanUp)} />
+              <Item label="Sweep: archive all from this sender" onClick={run(() => onSweep('archive'))} />
+              <Item label="Sweep: delete all from this sender, and future mail" onClick={run(() => onSweep('delete'))} />
+              <div className="my-1 border-t border-line" />
+              {!senderBlocked && <Item label="Block sender" onClick={run(onBlock)} />}
+              {!senderSafe && <Item label={senderBlocked ? 'Unblock and mark as safe' : 'Mark sender as safe'} onClick={run(onSafe)} />}
+              <div className="my-1 border-t border-line" />
+            </>
+          )}
+          <Item label="Mark all as read" onClick={run(onMarkAllRead)} />
+          <Item label="Empty Deleted Items" onClick={run(onEmptyDeleted)} />
         </Panel>
       )}
     </div>
