@@ -1,6 +1,6 @@
 # Zero-access encryption: Stage 0 spec
 
-Status: Stage 1 (key infrastructure) and Stage 2 (encrypted inbound) are built and tested. Stages 3 to 5 are not started.
+Status: Stages 1 (key infrastructure), 2 (encrypted inbound) and 3 (write paths) are built and tested. Stages 4 and 5 are not started.
 
 ## 1. The claim
 
