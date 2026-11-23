@@ -1,14 +1,38 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Loader2 } from 'lucide-react';
+import {
+  Loader2,
+  Inbox,
+  Flag,
+  Send,
+  FileText,
+  Archive,
+  Trash2,
+  ShieldAlert,
+  Clock,
+  Mail,
+  CalendarDays,
+  Users,
+  PenSquare,
+  Moon,
+  Settings as SettingsIcon,
+  Keyboard,
+  LogOut,
+  CalendarPlus,
+  UserPlus,
+  Tag,
+} from 'lucide-react';
 import type { Email, FolderId, LabelId, FilterTab, Category, AppView, Contact, ContactGroup, CalendarEvent } from '@/types';
 import { FOLDER_NAMES, LABEL_DEFS, contactName } from '@/types';
 import { useTheme } from '@/hooks/useTheme';
 import { useToasts } from '@/hooks/useToasts';
 import { useAuth } from '@/hooks/useAuth';
 import { isSupabaseConfigured } from '@/lib/supabase';
-import { sendEmail as apiSendEmail, fetchEmails, fetchEmailDetail, type MailpitMessage } from '@/lib/mailApi';
 import {
   fetchEmailsForUser,
+  sendViaResend,
+  subscribeToNewEmails,
+  fetchMyAddress,
+  claimAddress,
   fetchContactsForUser,
   fetchSignature,
   saveSignature,
@@ -33,6 +57,8 @@ import { Sidebar } from '@/components/Sidebar';
 import { TopBar } from '@/components/TopBar';
 import { AppRail } from '@/components/AppRail';
 import { CommandBar } from '@/components/CommandBar';
+import { CommandPalette, type PaletteCommand } from '@/components/CommandPalette';
+import { Logo } from '@/components/Logo';
 import { EmailList } from '@/components/EmailList';
 import { EmailReader } from '@/components/EmailReader';
 import { Composer, type ComposerState } from '@/components/Composer';
@@ -50,47 +76,6 @@ const SNOOZE_LABELS: Record<SnoozeOption, string> = {
   tomorrow: 'Tomorrow',
   'next-week': 'Next week',
 };
-
-const AVATAR_COLORS = ['#2563eb', '#0EA5E9', '#14B8A6', '#16A34A', '#F59E0B', '#EC4899', '#8B5CF6', '#DC2626'];
-
-function colorForSeed(seed: string): string {
-  let h = 0;
-  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
-  return AVATAR_COLORS[h % AVATAR_COLORS.length];
-}
-
-function mailpitToEmail(m: MailpitMessage): Email {
-  const name = m.From?.Name || m.From?.Address || 'Unknown';
-  const initials = name.split(/\s+/).map((p) => p[0]).slice(0, 2).join('').toUpperCase() || '?';
-  const created = new Date(m.Created);
-  const now = new Date();
-  const diffMs = now.getTime() - created.getTime();
-  const diffH = diffMs / 3.6e6;
-  const timestamp =
-    diffH < 1 ? 'Just now' :
-    diffH < 24 ? `${Math.floor(diffH)}h ago` :
-    diffH < 168 ? `${Math.floor(diffH / 24)}d ago` :
-    created.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  const date = created.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-  return {
-    id: `live-${m.ID}`,
-    sender: name,
-    senderEmail: m.From?.Address || '',
-    avatarColor: colorForSeed(m.From?.Address || name),
-    initials,
-    subject: m.Subject || '(No subject)',
-    preview: m.Snippet || '',
-    body: '',
-    timestamp,
-    date,
-    read: m.Read,
-    starred: false,
-    folder: 'inbox',
-    labels: [],
-    category: 'primary',
-    attachments: [],
-  };
-}
 
 interface MailAppProps {
   userId: string;
@@ -115,12 +100,8 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [listCollapsed, setListCollapsed] = useState(false);
 
-  // ---- Live mail (Mailpit) ----
-  const [liveMode, setLiveMode] = useState(false);
-  const [liveEmails, setLiveEmails] = useState<Email[]>([]);
-  const [liveLoading, setLiveLoading] = useState(false);
-  const [liveBodies, setLiveBodies] = useState<Record<string, string>>({});
-  const [liveError, setLiveError] = useState<string | null>(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [myAddress, setMyAddress] = useState<string | null>(null);
 
   // ---- App view ----
   const [view, setView] = useState<AppView>('mail');
@@ -180,6 +161,22 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
     };
   }, [userId]);
 
+  // ---- Live inbox: new mail appears the moment it arrives ----
+  useEffect(() => {
+    fetchMyAddress().then(setMyAddress).catch(() => {});
+    return subscribeToNewEmails(userId, (email) => {
+      setEmails((prev) => (prev.some((e) => e.id === email.id) ? prev : [email, ...prev]));
+      if (email.folder === 'inbox') push(`New mail from ${email.sender}`);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  const changeAddress = useCallback(async (handle: string) => {
+    const addr = await claimAddress(handle);
+    setMyAddress(addr);
+    return addr;
+  }, []);
+
   const setSignature = useCallback(
     (s: string) => {
       setSignatureState(s);
@@ -190,24 +187,11 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
 
   // ---- Derived mail list ----
   const visibleEmails = useMemo(() => {
-    let list = liveMode ? liveEmails : emails;
-    if (liveMode) {
-      // live mode: show all fetched emails in inbox, no category filtering
-      if (filter === 'unread') list = list.filter((e) => !e.read);
-      if (filter === 'starred') list = list.filter((e) => e.starred);
-      if (query.trim()) {
-        const q = query.toLowerCase();
-        list = list.filter(
-          (e) =>
-            e.sender.toLowerCase().includes(q) ||
-            e.subject.toLowerCase().includes(q) ||
-            e.preview.toLowerCase().includes(q),
-        );
-      }
-      return list;
-    }
+    let list = emails;
     if (activeLabel) {
       list = list.filter((e) => e.labels.includes(activeLabel));
+    } else if (activeFolder === 'starred') {
+      list = list.filter((e) => e.starred && e.folder !== 'trash' && e.folder !== 'spam');
     } else {
       list = list.filter((e) => e.folder === activeFolder);
     }
@@ -230,9 +214,8 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
   }, [emails, activeFolder, activeLabel, category, filter, query]);
 
   const activeEmail = useMemo(
-    () =>
-      (liveMode ? liveEmails : emails).find((e) => e.id === activeId) ?? null,
-    [liveMode, liveEmails, emails, activeId],
+    () => emails.find((e) => e.id === activeId) ?? null,
+    [emails, activeId],
   );
 
   // ---- Mail counts ----
@@ -306,53 +289,12 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
   const allContactsSelected =
     visibleContacts.length > 0 && visibleContacts.every((c) => selectedContactIds.has(c.id));
 
-  // ---- Live mail fetch ----
-  const refreshLiveEmails = useCallback(async () => {
-    setLiveLoading(true);
-    setLiveError(null);
-    try {
-      const data = await fetchEmails();
-      const mapped = data.messages.map(mailpitToEmail);
-      setLiveEmails(mapped);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to fetch';
-      setLiveError(msg);
-      setLiveEmails([]);
-    } finally {
-      setLiveLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (liveMode) refreshLiveEmails();
-  }, [liveMode, refreshLiveEmails]);
-
-  const handleToggleLive = () => {
-    setLiveMode((v) => !v);
-    setActiveLabel(null);
-    setFilter('all');
-    setQuery('');
-  };
-
   // ---- Mail actions ----
   const openEmail = useCallback((id: string) => {
     setActiveId(id);
-    if (liveMode) {
-      setLiveEmails((prev) => prev.map((e) => (e.id === id ? { ...e, read: true } : e)));
-      // fetch body lazily if not yet loaded
-      if (!liveBodies[id]) {
-        const mailpitId = id.replace(/^live-/, '');
-        fetchEmailDetail(mailpitId)
-          .then((detail) => {
-            setLiveBodies((prev) => ({ ...prev, [id]: detail.HTML || detail.Text || '' }));
-          })
-          .catch(() => {});
-      }
-    } else {
-      setEmails((prev) => prev.map((e) => (e.id === id ? { ...e, read: true } : e)));
-      dbUpdateEmail(id, { read: true }).catch(() => {});
-    }
-  }, [liveMode, liveBodies]);
+    setEmails((prev) => prev.map((e) => (e.id === id && !e.read ? { ...e, read: true } : e)));
+    dbUpdateEmail(id, { read: true }).catch(() => {});
+  }, []);
 
   const toggleSelect = useCallback((id: string) => {
     setSelectedIds((prev) => {
@@ -713,13 +655,14 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
 
   const sendEmail = useCallback(
     async (to: string, subject: string, body: string) => {
-      // Persist the sent copy first so it survives even if the SMTP hop fails.
+      const recipients = to.split(/[,;]/).map((r) => r.trim()).filter(Boolean);
+      // Persist the sent copy first so it survives even if delivery fails.
       let saved: Email;
       try {
         saved = await insertEmail(userId, {
           sender: 'You',
-          senderEmail: userEmail,
-          avatarColor: '#2563eb',
+          senderEmail: myAddress ?? userEmail,
+          avatarColor: '#0F6CBD',
           subject,
           preview: body.replace(/<[^>]+>/g, '').slice(0, 120) || '(no content)',
           body,
@@ -728,6 +671,7 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
           folder: 'sent',
           labels: [],
           category: 'primary',
+          toAddresses: recipients,
         });
       } catch {
         push('Failed to save sent email');
@@ -735,23 +679,20 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
       }
       setEmails((prev) => [saved, ...prev]);
 
-      // POST to Nodemailer backend (dev SMTP via Mailpit, or your real provider once wired up)
       try {
-        await apiSendEmail({ to, subject, html: body, from: `Typhoonpost <${userEmail}>` });
+        await sendViaResend({ to, subject, html: body });
         push(`Sent to ${to}`, 'View', () => {
           setView('mail');
           setActiveFolder('sent');
           setActiveLabel(null);
           setActiveId(saved.id);
         });
-        // if in live mode, refresh inbox to show the newly received copy
-        if (liveMode) refreshLiveEmails();
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Send failed';
-        push(`Send failed: ${msg}`);
+        push(`Saved to Sent Items, but delivery failed: ${msg}`);
       }
     },
-    [push, liveMode, refreshLiveEmails, userId, userEmail],
+    [push, userId, userEmail, myAddress],
   );
 
   const autosaveDraft = useCallback(
@@ -766,6 +707,11 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
   // ---- Keyboard shortcuts ----
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+        return;
+      }
       const target = e.target as HTMLElement;
       const typing =
         target.tagName === 'INPUT' ||
@@ -773,7 +719,7 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
         target.isContentEditable;
 
       if (typing) return;
-      if (composerState !== 'closed' || shortcutsOpen || settingsOpen || contactFormOpen) return;
+      if (composerState !== 'closed' || shortcutsOpen || settingsOpen || contactFormOpen || paletteOpen) return;
 
       switch (e.key.toLowerCase()) {
         case 'j':
@@ -811,6 +757,7 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
     shortcutsOpen,
     settingsOpen,
     contactFormOpen,
+    paletteOpen,
   ]);
 
   // ---- Folder / label switching ----
@@ -818,6 +765,7 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
     setView('mail');
     setActiveFolder(f);
     setActiveLabel(null);
+    setActiveId(null);
     setFilter('all');
     setQuery('');
     setListCollapsed(false);
@@ -826,6 +774,7 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
   const handleLabelToggle = (l: LabelId) => {
     setView('mail');
     setActiveLabel((prev) => (prev === l ? null : l));
+    setActiveId(null);
     setFilter('all');
     setQuery('');
   };
@@ -843,12 +792,34 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
     }
   };
 
+  const paletteCommands: PaletteCommand[] = [
+    { id: 'new-mail', group: 'Actions', label: 'New mail', Icon: PenSquare, shortcut: 'C', run: openComposer },
+    { id: 'new-event', group: 'Actions', label: 'New calendar event', Icon: CalendarPlus, run: () => { setView('calendar'); openNewEvent(new Date().toISOString()); } },
+    { id: 'new-contact', group: 'Actions', label: 'New contact', Icon: UserPlus, run: () => { setView('contacts'); setEditingContact(null); setContactFormOpen(true); } },
+    ...(['inbox', 'sent', 'drafts', 'trash', 'spam', 'archive', 'snoozed', 'starred'] as FolderId[]).map((f) => ({
+      id: `go-${f}`,
+      group: 'Go to folder',
+      label: FOLDER_NAMES[f],
+      Icon: { inbox: Inbox, sent: Send, drafts: FileText, trash: Trash2, spam: ShieldAlert, archive: Archive, snoozed: Clock, starred: Flag }[f],
+      run: () => handleFolderChange(f),
+    })),
+    ...LABEL_DEFS.map((l) => ({ id: `cat-${l.id}`, group: 'Categories', label: l.name, Icon: Tag, keywords: 'category label', run: () => handleLabelToggle(l.id) })),
+    { id: 'view-mail', group: 'Switch app', label: 'Mail', Icon: Mail, run: () => handleViewChange('mail') },
+    { id: 'view-calendar', group: 'Switch app', label: 'Calendar', Icon: CalendarDays, run: () => handleViewChange('calendar') },
+    { id: 'view-people', group: 'Switch app', label: 'People', Icon: Users, keywords: 'contacts', run: () => handleViewChange('contacts') },
+    { id: 'theme', group: 'Preferences', label: theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode', Icon: Moon, keywords: 'theme appearance', run: toggle },
+    { id: 'settings', group: 'Preferences', label: 'Settings', Icon: SettingsIcon, keywords: 'signature address', run: () => setSettingsOpen(true) },
+    { id: 'shortcuts', group: 'Preferences', label: 'Keyboard shortcuts', Icon: Keyboard, shortcut: '?', run: () => setShortcutsOpen(true) },
+    { id: 'signout', group: 'Account', label: 'Sign out', Icon: LogOut, run: onSignOut },
+  ];
+
   if (dataLoading) {
     return (
-      <div className="flex h-screen w-screen items-center justify-center bg-bg text-fg">
+      <div className="flex h-screen w-screen flex-col items-center justify-center gap-4 bg-bg text-fg">
+        <Logo size={56} className="animate-pulse" />
         <div className="flex items-center gap-2 text-sm text-fg-muted">
           <Loader2 className="h-4 w-4 animate-spin" />
-          Loading your mailbox…
+          Opening your mailbox…
         </div>
       </div>
     );
@@ -882,6 +853,7 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
         onToggleTheme={toggle}
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenShortcuts={() => setShortcutsOpen(true)}
+        onOpenPalette={() => setPaletteOpen(true)}
         userEmail={userEmail}
       />
 
@@ -898,11 +870,6 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
         userEmail={userEmail}
         contactCount={contacts.length}
         eventCount={events.length}
-        liveMode={liveMode}
-        onToggleLive={handleToggleLive}
-        liveLoading={liveLoading}
-        onRefreshLive={refreshLiveEmails}
-        liveError={liveError}
       />
 
       <main className="flex min-w-0 flex-1 flex-col">
@@ -939,7 +906,7 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
             onQuickDelete={deleteEmail}
             onQuickMarkUnread={markUnread}
             onQuickSnooze={handleQuickSnooze}
-            folderName={liveMode ? 'Live Inbox' : (activeLabel ? `Label: ${LABEL_DEFS.find((d) => d.id === activeLabel)?.name ?? activeLabel}` : FOLDER_NAMES[activeFolder])}
+            folderName={activeLabel ? `Category: ${LABEL_DEFS.find((d) => d.id === activeLabel)?.name ?? activeLabel}` : FOLDER_NAMES[activeFolder]}
             onClearSelection={() => setSelectedIds(new Set())}
             onSelectAll={selectAll}
             onBulkMarkRead={bulkMarkRead}
@@ -953,7 +920,7 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
           />
 
           <EmailReader
-            email={activeEmail ? { ...activeEmail, body: liveMode && liveBodies[activeEmail.id] ? liveBodies[activeEmail.id] : activeEmail.body } : null}
+            email={activeEmail}
             onReply={() => activeEmail && openComposerReply(activeEmail)}
             contacts={contacts}
             onAddToContacts={addSenderToContacts}
@@ -1018,6 +985,7 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
         editing={editingEvent}
         defaultStartISO={newEventStart}
       />
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={paletteCommands} />
       <ShortcutGuide open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       <SettingsModal
         open={settingsOpen}
@@ -1026,6 +994,8 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
         onSignatureChange={setSignature}
         accountEmail={userEmail}
         onSignOut={onSignOut}
+        myAddress={myAddress}
+        onChangeAddress={changeAddress}
       />
       <ContactForm
         open={contactFormOpen}

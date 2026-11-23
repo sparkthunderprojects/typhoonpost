@@ -23,6 +23,7 @@ interface EmailRow {
   has_replies: boolean;
   snoozed_until: string | null;
   created_at: string;
+  to_addresses?: string[] | null;
   attachments?: AttachmentRow[];
 }
 
@@ -107,6 +108,8 @@ function rowToEmail(row: EmailRow): Email {
     ),
     hasReplies: row.has_replies,
     snoozedUntil: row.snoozed_until ?? undefined,
+    createdAt: row.created_at,
+    toAddresses: row.to_addresses ?? [],
   };
 }
 
@@ -172,7 +175,7 @@ export async function saveSignature(userId: string, signature: string): Promise<
 
 export async function insertEmail(
   userId: string,
-  email: Omit<Email, 'id' | 'timestamp' | 'date' | 'initials' | 'attachments'>,
+  email: Omit<Email, 'id' | 'timestamp' | 'date' | 'initials' | 'attachments' | 'createdAt'>,
 ): Promise<Email> {
   const { data, error } = await supabase
     .from('emails')
@@ -191,6 +194,7 @@ export async function insertEmail(
       starred: email.starred,
       has_replies: email.hasReplies ?? false,
       snoozed_until: email.snoozedUntil ?? null,
+      to_addresses: email.toAddresses ?? [],
     })
     .select('*, attachments(*)')
     .single();
@@ -414,4 +418,71 @@ export async function seedAccountIfEmpty(userId: string): Promise<void> {
   }));
   const { error: contactErr } = await supabase.from('contacts').insert(contactRows);
   if (contactErr) throw contactErr;
+}
+
+// ---------------------------------------------------------------------------
+// Real mail: sending (Edge Function -> Resend) and live inbox updates
+// ---------------------------------------------------------------------------
+
+export interface SendPayload {
+  to: string;
+  cc?: string;
+  bcc?: string;
+  subject: string;
+  html: string;
+}
+
+/** Sends through the `send-email` Edge Function. Throws an Error with a readable message. */
+export async function sendViaResend(payload: SendPayload): Promise<{ id: string; from: string }> {
+  const { data, error } = await supabase.functions.invoke('send-email', { body: payload });
+  if (error) {
+    let message = 'Could not send the message';
+    const ctx = (error as { context?: Response }).context;
+    if (ctx && typeof ctx.json === 'function') {
+      try {
+        const body = await ctx.json();
+        if (body?.error) message = String(body.error);
+      } catch {
+        /* keep default */
+      }
+    } else if (error.message) {
+      message = error.message;
+    }
+    throw new Error(message);
+  }
+  return data as { id: string; from: string };
+}
+
+/** Calls `onNew` whenever a message lands in this user's mailbox. Returns an unsubscribe function. */
+export function subscribeToNewEmails(userId: string, onNew: (email: Email) => void): () => void {
+  const channel = supabase
+    .channel(`emails:${userId}`)
+    .on(
+      'postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'emails', filter: `user_id=eq.${userId}` },
+      async (payload) => {
+        const id = (payload.new as { id?: string }).id;
+        if (!id) return;
+        // Re-read so attachments are included.
+        const { data } = await supabase.from('emails').select('*, attachments(*)').eq('id', id).maybeSingle();
+        if (data) onNew(rowToEmail(data as EmailRow));
+      },
+    )
+    .subscribe();
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}
+
+/** The signed-in user's own Typhoonpost address (null until assigned). */
+export async function fetchMyAddress(): Promise<string | null> {
+  const { data } = await supabase.from('mailboxes').select('address').maybeSingle();
+  return data?.address ?? null;
+}
+
+/** Claim a different handle; returns the new full address. */
+export async function claimAddress(handle: string): Promise<string> {
+  const { data, error } = await supabase.rpc('claim_mailbox', { handle });
+  if (error) throw new Error(error.message);
+  return data as string;
 }

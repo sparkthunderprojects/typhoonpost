@@ -64,7 +64,9 @@ export function EmailListItem({
               email.read ? 'font-normal text-fg-muted' : 'font-semibold text-fg'
             }`}
           >
-            {email.sender}
+            {(email.folder === 'sent' || email.folder === 'drafts') && email.toAddresses?.length
+              ? `To: ${email.toAddresses.join(', ')}`
+              : email.sender}
           </span>
           {email.snoozedUntil && (
             <span className="flex shrink-0 items-center gap-1 rounded-full bg-warning/10 px-1.5 py-0.5 text-2xs font-medium text-warning">

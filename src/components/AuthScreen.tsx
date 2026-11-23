@@ -1,6 +1,6 @@
 import { Logo } from '@/components/Logo';
 import { useState } from 'react';
-import { Loader2, AlertTriangle } from 'lucide-react';
+import { Loader2, AlertTriangle, Eye, EyeOff, Inbox, CalendarDays, ShieldCheck } from 'lucide-react';
 import { isSupabaseConfigured } from '@/lib/supabase';
 
 interface AuthScreenProps {
@@ -12,6 +12,7 @@ export function AuthScreen({ onSignIn, onSignUp }: AuthScreenProps) {
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -57,57 +58,121 @@ export function AuthScreen({ onSignIn, onSignUp }: AuthScreenProps) {
   };
 
   return (
-    <div className="flex h-screen w-screen items-center justify-center bg-bg text-fg p-6">
-      <div className="w-full max-w-sm">
-        <div className="flex items-center gap-2 mb-8 justify-center">
-          <Logo size={36} />
-          <span className="text-lg font-semibold">Veloce Mail</span>
+    <div className="flex h-screen w-screen bg-bg text-fg">
+      {/* Brand panel */}
+      <aside className="relative hidden w-[46%] max-w-[680px] flex-col justify-between overflow-hidden bg-gradient-to-br from-[#0B4F8A] via-[#0F6CBD] to-[#2B88D8] p-12 text-white lg:flex">
+        <Logo size={520} tile={false} className="pointer-events-none absolute -bottom-40 -right-40 text-white/[0.07]" />
+        <div className="relative flex items-center gap-2.5">
+          <Logo size={34} tile={false} className="text-white" />
+          <span className="text-xl font-semibold tracking-tight">Typhoonpost</span>
         </div>
 
-        <div className="rounded-xl border border-line bg-bg-subtle shadow-panel p-6">
-          <h1 className="text-base font-semibold mb-1">
+        <div className="relative max-w-md">
+          <h2 className="text-4xl font-semibold leading-tight tracking-tight">
+            Mail, calendar and people. One calm place.
+          </h2>
+          <p className="mt-4 text-base leading-relaxed text-white/80">
+            A fast, focused inbox with the tools you expect from a professional mail platform, and none of the clutter.
+          </p>
+          <ul className="mt-8 space-y-4">
+            {[
+              { Icon: Inbox, title: 'Focused inbox', text: 'What matters first, the rest one tap away.' },
+              { Icon: CalendarDays, title: 'Built-in calendar', text: 'Plan your day without leaving your mail.' },
+              { Icon: ShieldCheck, title: 'Private by design', text: 'Your mailbox is only ever visible to you.' },
+            ].map(({ Icon, title, text }) => (
+              <li key={title} className="flex items-start gap-3">
+                <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/15">
+                  <Icon className="h-4 w-4" />
+                </span>
+                <span>
+                  <span className="block text-sm font-semibold">{title}</span>
+                  <span className="block text-sm text-white/75">{text}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <p className="relative text-xs text-white/60">&copy; {new Date().getFullYear()} Typhoonpost</p>
+      </aside>
+
+      {/* Form */}
+      <main className="flex flex-1 items-center justify-center p-6">
+        <div className="w-full max-w-sm">
+          <div className="mb-8 flex items-center gap-2 lg:hidden">
+            <Logo size={32} />
+            <span className="text-lg font-semibold tracking-tight">Typhoonpost</span>
+          </div>
+
+          <h1 className="text-2xl font-semibold tracking-tight">
             {mode === 'signin' ? 'Sign in' : 'Create your account'}
           </h1>
-          <p className="text-sm text-fg-muted mb-5">
-            {mode === 'signin' ? 'Welcome back.' : 'Takes about ten seconds.'}
+          <p className="mb-6 mt-1 text-sm text-fg-muted">
+            {mode === 'signin' ? 'Welcome back. Your inbox is waiting.' : 'Takes about ten seconds.'}
           </p>
 
-          <form onSubmit={handleSubmit} className="space-y-3">
+          <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-xs font-medium text-fg-muted mb-1">Email</label>
+              <label htmlFor="email" className="mb-1 block text-xs font-semibold text-fg-muted">
+                Email
+              </label>
               <input
+                id="email"
                 type="email"
                 required
                 autoFocus
+                autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
-                className="w-full rounded-lg border border-line bg-bg px-3 py-2 text-sm outline-none focus:border-accent focus:ring-1 focus:ring-accent"
+                className="h-11 w-full rounded-md border border-line-strong bg-bg-subtle px-3 text-sm outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/25"
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-fg-muted mb-1">Password</label>
-              <input
-                type="password"
-                required
-                minLength={6}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="w-full rounded-lg border border-line bg-bg px-3 py-2 text-sm outline-none focus:border-accent focus:ring-1 focus:ring-accent"
-              />
+              <label htmlFor="password" className="mb-1 block text-xs font-semibold text-fg-muted">
+                Password
+              </label>
+              <div className="relative">
+                <input
+                  id="password"
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  minLength={6}
+                  autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="h-11 w-full rounded-md border border-line-strong bg-bg-subtle px-3 pr-10 text-sm outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/25"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1.5 text-fg-subtle hover:text-fg"
+                >
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
             </div>
 
-            {error && <p className="text-sm text-danger">{error}</p>}
-            {notice && <p className="text-sm text-success">{notice}</p>}
+            {error && (
+              <p role="alert" className="rounded-md bg-danger/10 px-3 py-2 text-sm text-danger">
+                {error}
+              </p>
+            )}
+            {notice && (
+              <p role="status" className="rounded-md bg-success/10 px-3 py-2 text-sm text-success">
+                {notice}
+              </p>
+            )}
 
             <button
               type="submit"
               disabled={loading}
-              className="w-full flex items-center justify-center gap-2 rounded-lg bg-accent text-accent-fg text-sm font-medium py-2 hover:opacity-90 disabled:opacity-60 transition"
+              className="flex h-11 w-full items-center justify-center gap-2 rounded-md bg-accent text-sm font-semibold text-accent-fg shadow-soft transition hover:brightness-110 active:scale-[0.99] disabled:opacity-60"
             >
-              {loading && <Loader2 size={14} className="animate-spin" />}
-              {mode === 'signin' ? 'Sign in' : 'Sign up'}
+              {loading && <Loader2 size={16} className="animate-spin" />}
+              {mode === 'signin' ? 'Sign in' : 'Create account'}
             </button>
           </form>
 
@@ -117,12 +182,20 @@ export function AuthScreen({ onSignIn, onSignUp }: AuthScreenProps) {
               setError(null);
               setNotice(null);
             }}
-            className="mt-4 w-full text-center text-sm text-fg-muted hover:text-fg transition"
+            className="mt-6 w-full text-center text-sm text-fg-muted transition hover:text-fg"
           >
-            {mode === 'signin' ? "Don't have an account? Sign up" : 'Already have an account? Sign in'}
+            {mode === 'signin' ? (
+              <>
+                New to Typhoonpost? <span className="font-semibold text-accent">Create an account</span>
+              </>
+            ) : (
+              <>
+                Already have an account? <span className="font-semibold text-accent">Sign in</span>
+              </>
+            )}
           </button>
         </div>
-      </div>
+      </main>
     </div>
   );
 }

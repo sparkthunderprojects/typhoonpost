@@ -1,10 +1,28 @@
 import { AnimatePresence, motion } from 'framer-motion';
+import DOMPurify from 'dompurify';
 import { Reply, Paperclip, Clock, MailOpen } from 'lucide-react';
 import type { Email, Contact } from '@/types';
 import { LABEL_DEFS } from '@/types';
 import { Avatar } from '@/components/Avatar';
 import { AttachmentIcon } from '@/components/AttachmentIcon';
 import { SenderHoverCard, isSenderSaved } from '@/components/SenderHoverCard';
+
+DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+  if (node.tagName === 'A') {
+    node.setAttribute('target', '_blank');
+    node.setAttribute('rel', 'noopener noreferrer');
+  }
+});
+
+/** Inbound HTML comes from the open internet: strip scripts, handlers, forms and remote tracking hooks. */
+function sanitizeHtml(html: string): string {
+  return DOMPurify.sanitize(html, {
+    USE_PROFILES: { html: true },
+    FORBID_TAGS: ['style', 'form', 'input', 'button', 'iframe', 'object', 'embed', 'link', 'meta'],
+    FORBID_ATTR: ['style', 'srcset'],
+    ADD_ATTR: ['target'],
+  });
+}
 
 interface EmailReaderProps {
   email: Email | null;
@@ -92,7 +110,7 @@ export function EmailReader({
 
                 <div
                   className="email-body mt-6 text-sm leading-relaxed text-fg"
-                  dangerouslySetInnerHTML={{ __html: email.body }}
+                  dangerouslySetInnerHTML={{ __html: sanitizeHtml(email.body) }}
                 />
 
                 {email.attachments.length > 0 && (
@@ -142,13 +160,11 @@ export function EmailReader({
             exit={{ opacity: 0 }}
             className="flex h-full flex-col items-center justify-center gap-3 text-fg-subtle"
           >
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-bg-muted">
-              <MailOpen className="h-6 w-6 opacity-50" />
+            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-bg-muted text-accent/70">
+              <MailOpen className="h-7 w-7" />
             </div>
-            <p className="text-sm font-medium">No message selected</p>
-            <p className="max-w-[220px] text-center text-xs">
-              Select an email from the list to read it here.
-            </p>
+            <p className="text-base font-semibold text-fg-muted">Select an item to read</p>
+            <p className="max-w-[240px] text-center text-sm">Nothing is selected. Pick a message from the list.</p>
           </motion.div>
         )}
       </AnimatePresence>

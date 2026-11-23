@@ -1,4 +1,4 @@
-import { Search, X, Moon, Sun, Settings, Keyboard } from 'lucide-react';
+import { Search, X, Moon, Sun, Settings, Keyboard, Command } from 'lucide-react';
 import { Logo } from '@/components/Logo';
 
 interface TopBarProps {
@@ -10,6 +10,7 @@ interface TopBarProps {
   onToggleTheme: () => void;
   onOpenSettings: () => void;
   onOpenShortcuts: () => void;
+  onOpenPalette: () => void;
   userEmail: string;
 }
 
@@ -22,6 +23,7 @@ export function TopBar({
   onToggleTheme,
   onOpenSettings,
   onOpenShortcuts,
+  onOpenPalette,
   userEmail,
 }: TopBarProps) {
   const initial = (userEmail[0] ?? '?').toUpperCase();
@@ -59,6 +61,9 @@ export function TopBar({
       </div>
 
       <div className="flex shrink-0 items-center gap-0.5">
+        <button onClick={onOpenPalette} className={iconBtn} title="Command palette (Ctrl+K)">
+          <Command className="h-4 w-4" />
+        </button>
         <button onClick={onToggleTheme} className={iconBtn} title={theme === 'dark' ? 'Light mode' : 'Dark mode'}>
           {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
         </button>

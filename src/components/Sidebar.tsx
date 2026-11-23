@@ -9,9 +9,6 @@ import {
   ShieldAlert,
   Clock,
   Users,
-  Radio,
-  RefreshCw,
-  AlertCircle,
   ChevronDown,
   ChevronRight,
 } from 'lucide-react';
@@ -29,11 +26,6 @@ interface SidebarProps {
   userEmail: string;
   contactCount: number;
   eventCount: number;
-  liveMode: boolean;
-  onToggleLive: () => void;
-  liveLoading: boolean;
-  onRefreshLive: () => void;
-  liveError: string | null;
 }
 
 const ICONS: Record<FolderId, typeof Inbox> = {
@@ -89,11 +81,6 @@ export function Sidebar({
   userEmail,
   contactCount,
   eventCount,
-  liveMode,
-  onToggleLive,
-  liveLoading,
-  onRefreshLive,
-  liveError,
 }: SidebarProps) {
   const folderRow = (id: FolderId) => {
     const active = activeFolder === id && !activeLabel;
@@ -152,35 +139,6 @@ export function Sidebar({
             </Section>
           </nav>
 
-          {/* Developer: live mail via local Mailpit */}
-          <div className="border-t border-line p-2">
-            <button
-              onClick={onToggleLive}
-              className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs font-medium transition-colors ${
-                liveMode ? 'bg-accent-soft text-accent' : 'text-fg-muted hover:bg-bg-muted hover:text-fg'
-              }`}
-            >
-              <Radio className="h-3.5 w-3.5" />
-              <span className="flex-1 text-left">Live mail (Mailpit)</span>
-              {liveMode && (
-                <span
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onRefreshLive();
-                  }}
-                  className="rounded p-0.5 hover:bg-bg"
-                  title="Refresh"
-                >
-                  <RefreshCw className={`h-3.5 w-3.5 ${liveLoading ? 'animate-spin' : ''}`} />
-                </span>
-              )}
-            </button>
-            {liveMode && liveError && (
-              <p className="mt-1 flex items-center gap-1 px-1 text-2xs text-danger">
-                <AlertCircle className="h-3 w-3" /> {liveError}
-              </p>
-            )}
-          </div>
         </>
       )}
 

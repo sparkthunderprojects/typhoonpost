@@ -41,6 +41,9 @@ export interface Email {
   attachments: Attachment[];
   hasReplies?: boolean;
   snoozedUntil?: string;
+  /** ISO timestamp the message was received/sent (used for date grouping). */
+  createdAt?: string;
+  toAddresses?: string[];
 }
 
 export interface ToastItem {

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Inbox, PanelLeftClose, PanelLeft, CheckSquare, Trash2, Mail, Archive, ListFilter, Check } from 'lucide-react';
 import type { Email, FilterTab, Category } from '@/types';
 import { EmailListItem } from '@/components/EmailListItem';
+import { Logo } from '@/components/Logo';
 
 interface EmailListProps {
   emails: Email[];
@@ -175,29 +176,71 @@ export function EmailList({
 
       <div className="flex-1 overflow-y-auto scrollbar-thin">
         {emails.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-2 text-fg-subtle">
-            <Inbox className="h-8 w-8 opacity-40" />
-            <p className="text-sm">No messages here</p>
-          </div>
+          <EmptyState folderName={folderName} filtered={filter !== 'all'} />
         ) : (
-          emails.map((email) => (
-            <EmailListItem
-              key={email.id}
-              email={email}
-              active={email.id === activeId}
-              selected={selectedIds.has(email.id)}
-              onOpen={() => onOpen(email.id)}
-              onToggleSelect={() => onToggleSelect(email.id)}
-              onToggleStar={() => onToggleStar(email.id)}
-              onQuickArchive={() => onQuickArchive(email.id)}
-              onQuickDelete={() => onQuickDelete(email.id)}
-              onQuickMarkUnread={() => onQuickMarkUnread(email.id)}
-              onQuickSnooze={(e) => onQuickSnooze(e, email.id)}
-            />
+          groupByDate(emails).map((group) => (
+            <div key={group.label}>
+              <div className="sticky top-0 z-10 border-b border-line bg-bg-subtle/95 px-4 py-1.5 text-xs font-semibold text-fg-muted backdrop-blur">
+                {group.label}
+              </div>
+              {group.items.map((email) => (
+                <EmailListItem
+                  key={email.id}
+                  email={email}
+                  active={email.id === activeId}
+                  selected={selectedIds.has(email.id)}
+                  onOpen={() => onOpen(email.id)}
+                  onToggleSelect={() => onToggleSelect(email.id)}
+                  onToggleStar={() => onToggleStar(email.id)}
+                  onQuickArchive={() => onQuickArchive(email.id)}
+                  onQuickDelete={() => onQuickDelete(email.id)}
+                  onQuickMarkUnread={() => onQuickMarkUnread(email.id)}
+                  onQuickSnooze={(e) => onQuickSnooze(e, email.id)}
+                />
+              ))}
+            </div>
           ))
         )}
       </div>
     </section>
+  );
+}
+
+function groupByDate(emails: Email[]): { label: string; items: Email[] }[] {
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const day = 24 * 3600 * 1000;
+  const order = ['Today', 'Yesterday', 'This week', 'Last week', 'Earlier'];
+  const buckets = new Map<string, Email[]>();
+  for (const e of emails) {
+    const t = e.createdAt ? new Date(e.createdAt).getTime() : Date.now();
+    const age = startOfToday.getTime() - t;
+    const label =
+      age <= 0 ? 'Today' : age <= day ? 'Yesterday' : age <= 6 * day ? 'This week' : age <= 13 * day ? 'Last week' : 'Earlier';
+    if (!buckets.has(label)) buckets.set(label, []);
+    buckets.get(label)!.push(e);
+  }
+  return order.filter((l) => buckets.has(l)).map((label) => ({ label, items: buckets.get(label)! }));
+}
+
+function EmptyState({ folderName, filtered }: { folderName: string; filtered: boolean }) {
+  const inbox = folderName === 'Inbox';
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center">
+      <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-accent-soft text-accent">
+        {inbox && !filtered ? <Logo size={34} tile={false} /> : <Inbox className="h-7 w-7" />}
+      </div>
+      <p className="text-base font-semibold text-fg">
+        {filtered ? 'Nothing matches this filter' : inbox ? "You're all caught up" : 'Nothing here yet'}
+      </p>
+      <p className="max-w-[240px] text-sm text-fg-muted">
+        {filtered
+          ? 'Clear the filter to see everything in this folder.'
+          : inbox
+            ? 'New messages will appear here the moment they arrive.'
+            : `Messages you move to ${folderName} will show up here.`}
+      </p>
+    </div>
   );
 }
 
