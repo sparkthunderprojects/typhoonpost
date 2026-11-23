@@ -19,8 +19,8 @@ The public website must not use the words "zero-access" until Stage 4 ships, and
 | # | Decision | Status |
 |---|----------|--------|
 | 1 | Losing both password and recovery key means the mail is unrecoverable. No server-side reset. | Confirmed by owner |
-| 2 | Subject, sender, recipients, snippet, body, attachments (including file names) are encrypted. Timestamps, folder, flags, size stay readable. | Assumed, awaiting confirmation |
-| 3 | Stages 1 to 3 ship before any real user is invited. | Assumed, awaiting confirmation |
+| 2 | Subject, sender, recipients, snippet, body, attachments (including file names) are encrypted. Timestamps, folder, flags, size stay readable. | Confirmed by owner |
+| 3 | Stages 1 to 3 ship before any real user is invited. | Confirmed by owner |
 
 ## 3. Primitives
 
@@ -75,8 +75,8 @@ Table `user_keys`: `user_id`, `public_key`, `wrapped_by_password`, `wrapped_by_r
 
 - No server-side search, rules or forwarding on content.
 - Server-side threading needs plaintext. Open item: a thread key computed at ingest from message headers, stored as an HMAC so equal threads group without exposing subjects.
-- Session handling: the unwrapped key lives in memory, with a decision pending on whether to survive page reloads via `sessionStorage`. It trades convenience against exposure to script injection.
-- Existing accounts are test data and will be reset. This is only free before launch.
+- Session handling (decided): the unwrapped key lives in memory and is mirrored to `sessionStorage`, so a refresh does not ask for the password but a new tab or a closed browser does. Any script on the page could read it, which is why the app serves no third-party scripts.
+- Existing accounts are upgraded in place (see Stage 1 as built). Migrating real users later would be much harder.
 
 ## 7. Staging
 
@@ -97,4 +97,4 @@ Table `user_keys`: `user_id`, `public_key`, `wrapped_by_password`, `wrapped_by_r
 ## 9. Open questions
 
 1. Decisions 2 and 3, session-persisted key and header-based thread key: owner agreed to the recommendations.
-2. Which Argon2id implementation, after measuring speed on a mid-range phone.
+2. Argon2id (from `@noble/hashes`) still needs timing on a mid-range phone.
