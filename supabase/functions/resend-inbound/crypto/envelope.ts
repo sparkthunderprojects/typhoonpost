@@ -37,6 +37,8 @@ export interface MessagePayload {
   /** Only ever present on the sender's own copy (Sent Items, drafts). Never in a recipient's copy. */
   bcc?: string[];
   importance?: 'high' | 'low';
+  /** A meeting invitation, reply or cancellation. Same encrypted payload as the message itself. */
+  invite?: unknown;
   attachments: PayloadAttachment[];
 }
 

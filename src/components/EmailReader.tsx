@@ -20,6 +20,8 @@ interface EmailReaderProps {
   /** Every message in this conversation, oldest first (includes this one). */
   thread?: Email[];
   onOpenMessage?: (id: string) => void;
+  /** Shown above the message when it carries a meeting invitation. */
+  inviteCard?: React.ReactNode;
 }
 
 export function EmailReader({
@@ -33,6 +35,7 @@ export function EmailReader({
   onBack,
   thread = [],
   onOpenMessage,
+  inviteCard,
 }: EmailReaderProps) {
   const prefs = usePrefs();
   return (
@@ -156,7 +159,8 @@ export function EmailReader({
                   </div>
                 )}
 
-                <MessageBody html={email.body} senderEmail={email.senderEmail} />
+                {inviteCard}
+                {!inviteCard && <MessageBody html={email.body} senderEmail={email.senderEmail} />}
 
                 {email.attachments.length > 0 && (
                   <div className="mt-8">

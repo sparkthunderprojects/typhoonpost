@@ -3,18 +3,23 @@ import { CalendarDays, Check, ChevronLeft, ChevronRight, Plus, Repeat as RepeatI
 import type { CalendarEvent, Task } from '@/types';
 import { EVENT_COLORS } from '@/types';
 import {
-  addCalendar, calendarOf, calendarsOf, editCalendar, removeCalendar, setSecondaryTz, setShowTasksOnCalendar, setWeekStart, usePrefs,
+  addCalendar, calendarOf, calendarsOf, editCalendar, removeCalendar, setSecondaryTz, setShowTasksOnCalendar, setShowWeekNumbers, setWeekStart, setWorkingHours, usePrefs,
 } from '@/lib/prefs';
 import {
   addDays, allTimeZones, dateKey, expandAll, localTz, shortTime, startOfDay, startOfWeek, type Occurrence,
 } from '@/lib/calendar';
 import { isMailDrag, readMailDrag } from '@/lib/dnd';
 
-export type CalendarMode = 'day' | 'week' | 'month' | 'agenda';
+export type CalendarMode = 'day' | 'workweek' | 'week' | 'month' | 'agenda';
 
 interface CalendarViewProps {
   events: CalendarEvent[];
+  /** Events from internet calendars. Read-only. */
+  subscribed?: CalendarEvent[];
   tasks: Task[];
+  /** The bottom edge of an event was dragged. */
+  onResizeOccurrence: (occ: { event: CalendarEvent; start: Date }, newEnd: Date) => void;
+  sources: React.ReactNode;
   /** Start (and end, when dragged out) as ISO strings. */
   onCreate: (startISO: string, endISO?: string, allDay?: boolean) => void;
   onOpenEvent: (event: CalendarEvent, occurrenceStart: Date) => void;
@@ -35,6 +40,7 @@ const WEEKDAYS_SUN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 const MODES: { id: CalendarMode; label: string }[] = [
   { id: 'day', label: 'Day' },
+  { id: 'workweek', label: 'Work week' },
   { id: 'week', label: 'Week' },
   { id: 'month', label: 'Month' },
   { id: 'agenda', label: 'Agenda' },
@@ -63,7 +69,7 @@ function lanes(occs: Occurrence[]): Map<string, { lane: number; of: number }> {
   return out;
 }
 
-export function CalendarView({ events, tasks, onCreate, onOpenEvent, onToggleTask, onTaskToCalendar, onMoveOccurrence, onMailToCalendar }: CalendarViewProps) {
+export function CalendarView({ events, subscribed = [], tasks, onResizeOccurrence, sources, onCreate, onOpenEvent, onToggleTask, onTaskToCalendar, onMoveOccurrence, onMailToCalendar }: CalendarViewProps) {
   const prefs = usePrefs();
   const [mode, setMode] = useState<CalendarMode>('week');
   const [anchor, setAnchor] = useState(() => new Date());
@@ -76,8 +82,8 @@ export function CalendarView({ events, tasks, onCreate, onOpenEvent, onToggleTas
     return () => window.clearInterval(t);
   }, []);
   useEffect(() => {
-    if (scroller.current && (mode === 'day' || mode === 'week')) scroller.current.scrollTop = 7 * HOUR_H;
-  }, [mode]);
+    if (scroller.current && (mode === 'day' || mode === 'week' || mode === 'workweek')) scroller.current.scrollTop = Math.max(0, prefs.workStart - 1) * HOUR_H;
+  }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const weekStart = prefs.weekStartsOn;
   const days = useMemo(() => {
@@ -85,6 +91,10 @@ export function CalendarView({ events, tasks, onCreate, onOpenEvent, onToggleTas
     if (mode === 'week') {
       const s = startOfWeek(anchor, weekStart);
       return Array.from({ length: 7 }, (_, i) => addDays(s, i));
+    }
+    if (mode === 'workweek') {
+      const s = startOfWeek(anchor, 1);
+      return Array.from({ length: 5 }, (_, i) => addDays(s, i));
     }
     if (mode === 'agenda') return Array.from({ length: 30 }, (_, i) => addDays(startOfDay(anchor), i));
     const first = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
@@ -94,7 +104,7 @@ export function CalendarView({ events, tasks, onCreate, onOpenEvent, onToggleTas
 
   const visibleEvents = useMemo(() => events.filter((e) => calendarOf(prefs, e.calendarId).visible), [events, prefs]);
   const range = useMemo(() => ({ from: days[0], to: addDays(days[days.length - 1], 1) }), [days]);
-  const occurrences = useMemo(() => expandAll(visibleEvents, range.from, range.to), [visibleEvents, range]);
+  const occurrences = useMemo(() => expandAll([...visibleEvents, ...subscribed], range.from, range.to), [visibleEvents, subscribed, range]);
   const todayKey = dateKey(now);
 
   const tasksByDay = useMemo(() => {
@@ -109,14 +119,14 @@ export function CalendarView({ events, tasks, onCreate, onOpenEvent, onToggleTas
 
   const step = (dir: -1 | 1) =>
     setAnchor((a) =>
-      mode === 'day' ? addDays(a, dir) : mode === 'week' ? addDays(a, dir * 7) : mode === 'agenda' ? addDays(a, dir * 30) : new Date(a.getFullYear(), a.getMonth() + dir, 1),
+      mode === 'day' ? addDays(a, dir) : mode === 'week' || mode === 'workweek' ? addDays(a, dir * 7) : mode === 'agenda' ? addDays(a, dir * 30) : new Date(a.getFullYear(), a.getMonth() + dir, 1),
     );
 
   const title =
     mode === 'day'
       ? anchor.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
-      : mode === 'week'
-        ? `${days[0].toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} – ${days[6].toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`
+      : mode === 'week' || mode === 'workweek'
+        ? `${days[0].toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} – ${days[days.length - 1].toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}${prefs.showWeekNumbers ? ` · Week ${isoWeek(days[0])}` : ''}`
         : mode === 'agenda'
           ? `Next 30 days from ${anchor.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`
           : anchor.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
@@ -145,7 +155,7 @@ export function CalendarView({ events, tasks, onCreate, onOpenEvent, onToggleTas
 
   return (
     <div className="flex min-h-0 flex-1 overflow-hidden bg-bg">
-      <SidePanel events={visibleEvents} tasks={tasks} now={now} onToggleTask={onToggleTask} />
+      <SidePanel events={visibleEvents} tasks={tasks} now={now} onToggleTask={onToggleTask} sources={sources} />
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2.5">
           <div className="flex items-center gap-2">
@@ -193,7 +203,7 @@ export function CalendarView({ events, tasks, onCreate, onOpenEvent, onToggleTas
           </div>
         </div>
 
-        {(mode === 'day' || mode === 'week') && (
+        {(mode === 'day' || mode === 'week' || mode === 'workweek') && (
           <TimeGrid
             days={days}
             occurrences={occurrences}
@@ -205,6 +215,10 @@ export function CalendarView({ events, tasks, onCreate, onOpenEvent, onToggleTas
             onCreate={onCreate}
             onOpen={onOpenEvent}
             onToggleTask={onToggleTask}
+            onResize={onResizeOccurrence}
+            workStart={prefs.workStart}
+            workEnd={prefs.workEnd}
+            workDays={prefs.workDays}
             onDrop={handleDrop}
             allowDrop={allowDrop}
           />
@@ -305,6 +319,21 @@ export function CalendarView({ events, tasks, onCreate, onOpenEvent, onToggleTas
   );
 }
 
+const isoWeek = (d: Date) => {
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  t.setUTCDate(t.getUTCDate() + 4 - (t.getUTCDay() || 7));
+  return Math.ceil(((t.getTime() - Date.UTC(t.getUTCFullYear(), 0, 1)) / 86400000 + 1) / 7);
+};
+
+/** Outlook's "Show as": free is an outline, tentative is faded and dashed, out of office is purple. */
+function eventStyle(e: CalendarEvent): React.CSSProperties {
+  const c = e.showAs === 'oof' ? '#7c3aed' : e.color;
+  if (e.showAs === 'free') return { backgroundColor: 'transparent', border: `2px solid ${c}`, color: c };
+  if (e.showAs === 'tentative') return { backgroundColor: `${c}33`, border: `2px dashed ${c}`, color: c };
+  if (e.showAs === 'elsewhere') return { backgroundColor: `${c}33`, borderLeft: `4px solid ${c}`, color: c };
+  return { backgroundColor: c };
+}
+
 function EventChip({ occ, onOpen }: { occ: Occurrence; onOpen: CalendarViewProps['onOpenEvent'] }) {
   const e = occ.event;
   return (
@@ -316,7 +345,7 @@ function EventChip({ occ, onOpen }: { occ: Occurrence; onOpen: CalendarViewProps
         onOpen(e, occ.start);
       }}
       className="flex items-center gap-1 truncate rounded px-1.5 py-0.5 text-left text-2xs font-medium text-white"
-      style={{ backgroundColor: e.color }}
+      style={eventStyle(e)}
       title={e.title}
     >
       {occ.recurring && <RepeatIcon className="h-2.5 w-2.5 shrink-0" aria-hidden />}
@@ -344,8 +373,12 @@ function TaskChip({ task, onToggle }: { task: Task; onToggle: (t: Task) => void 
 }
 
 function TimeGrid({
-  days, occurrences, tasksByDay, todayKey, now, secondaryTz, scroller, onCreate, onOpen, onToggleTask, onDrop, allowDrop,
+  days, occurrences, tasksByDay, todayKey, now, secondaryTz, scroller, onCreate, onOpen, onToggleTask, onDrop, allowDrop, onResize, workStart, workEnd, workDays,
 }: {
+  onResize: CalendarViewProps['onResizeOccurrence'];
+  workStart: number;
+  workEnd: number;
+  workDays: number[];
   days: Date[];
   occurrences: Occurrence[];
   tasksByDay: Map<string, Task[]>;
@@ -367,6 +400,34 @@ function TimeGrid({
     return new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, minutes);
   };
   const tz = localTz();
+  const [resizing, setResizing] = useState<{ key: string; endMs: number } | null>(null);
+  const resizeGuard = useRef(false);
+  const startResize = (e: React.MouseEvent, o: Occurrence) => {
+    e.preventDefault();
+    e.stopPropagation();
+    resizeGuard.current = true;
+    const y0 = e.clientY;
+    const end0 = o.end.getTime();
+    const endFor = (y: number) => {
+      const mins = Math.round((((end0 - o.start.getTime()) / 60000 + ((y - y0) / HOUR_H) * 60)) / 15) * 15;
+      return o.start.getTime() + Math.max(15, mins) * 60000;
+    };
+    const move = (ev: MouseEvent) => setResizing({ key: o.key, endMs: endFor(ev.clientY) });
+    const up = (ev: MouseEvent) => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      resizeGuard.current = false;
+      // The click that follows letting go of the mouse must not open or create anything.
+      const swallow = (c: MouseEvent) => { c.stopPropagation(); c.preventDefault(); };
+      window.addEventListener('click', swallow, { capture: true, once: true });
+      window.setTimeout(() => window.removeEventListener('click', swallow, true), 100);
+      setResizing(null);
+      const endMs = endFor(ev.clientY);
+      if (endMs !== end0) onResize({ event: o.event, start: o.start }, new Date(endMs));
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -433,7 +494,7 @@ function TimeGrid({
               <div
                 key={key}
                 data-day={key}
-                className="relative border-l border-line"
+                className={`relative border-l border-line ${workDays.includes(d.getDay()) ? '' : 'bg-bg-muted/50'}`}
                 onClick={(e) => {
                   if ((e.target as HTMLElement).closest('[data-event]')) return;
                   const s = at(d, e, e.currentTarget);
@@ -442,12 +503,18 @@ function TimeGrid({
                 onDragOver={allowDrop}
                 onDrop={(e) => onDrop(e, at(d, e, e.currentTarget))}
               >
+                {workDays.includes(d.getDay()) && (
+                  <>
+                    <div className="pointer-events-none absolute inset-x-0 top-0 bg-bg-muted/50" style={{ height: workStart * HOUR_H }} data-testid="off-hours" />
+                    <div className="pointer-events-none absolute inset-x-0 bg-bg-muted/50" style={{ top: workEnd * HOUR_H, height: Math.max(0, 24 - workEnd) * HOUR_H }} />
+                  </>
+                )}
                 {hours.map((h) => (
                   <div key={h} className="absolute inset-x-0 border-t border-line/70" style={{ top: h * HOUR_H }} />
                 ))}
                 {timed.map((o) => {
                   const s = Math.max(o.start.getTime(), dayStart);
-                  const e = Math.min(o.end.getTime(), dayEnd);
+                  const e = Math.min(resizing?.key === o.key ? resizing.endMs : o.end.getTime(), dayEnd);
                   const top = ((s - dayStart) / 3600000) * HOUR_H;
                   const height = Math.max(20, ((e - s) / 3600000) * HOUR_H - 2);
                   const { lane, of } = placed.get(o.key) ?? { lane: 0, of: 1 };
@@ -456,13 +523,19 @@ function TimeGrid({
                       key={o.key}
                       data-event
                       draggable
-                      onDragStart={(ev) => ev.dataTransfer.setData(OCC_MIME, JSON.stringify({ id: o.event.id, startISO: o.start.toISOString() }))}
+                      onDragStart={(ev) => {
+                        if (resizeGuard.current || o.event.id.startsWith('sub:')) {
+                          ev.preventDefault();
+                          return;
+                        }
+                        ev.dataTransfer.setData(OCC_MIME, JSON.stringify({ id: o.event.id, startISO: o.start.toISOString() }));
+                      }}
                       onClick={(ev) => {
                         ev.stopPropagation();
                         onOpen(o.event, o.start);
                       }}
                       className="absolute overflow-hidden rounded-md px-1.5 py-0.5 text-left text-2xs font-medium leading-tight text-white shadow-soft"
-                      style={{ top, height, left: `calc(${(lane / of) * 100}% + 1px)`, width: `calc(${100 / of}% - 3px)`, backgroundColor: o.event.color }}
+                      style={{ top, height, left: `calc(${(lane / of) * 100}% + 1px)`, width: `calc(${100 / of}% - 3px)`, ...eventStyle(o.event) }}
                       title={o.event.title}
                     >
                       <span className="block truncate font-semibold">
@@ -473,6 +546,15 @@ function TimeGrid({
                         {shortTime(o.start)} – {shortTime(o.end)}
                         {o.event.tz && o.event.tz !== tz ? ` (${shortTime(o.start, o.event.tz)} ${o.event.tz.split('/').pop()?.replace('_', ' ')})` : ''}
                       </span>
+                      {!o.event.id.startsWith('sub:') && (
+                        <span
+                          data-resize
+                          onMouseDown={(ev) => startResize(ev, o)}
+                          onClick={(ev) => ev.stopPropagation()}
+                          className="absolute inset-x-0 -bottom-0.5 h-2 cursor-ns-resize"
+                          aria-hidden
+                        />
+                      )}
                     </button>
                   );
                 })}
@@ -491,7 +573,7 @@ function TimeGrid({
   );
 }
 
-function SidePanel({ events, tasks, now, onToggleTask }: { events: CalendarEvent[]; tasks: Task[]; now: Date; onToggleTask: (t: Task) => void }) {
+function SidePanel({ events, tasks, now, onToggleTask, sources }: { events: CalendarEvent[]; tasks: Task[]; now: Date; onToggleTask: (t: Task) => void; sources: React.ReactNode }) {
   const prefs = usePrefs();
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
@@ -549,6 +631,8 @@ function SidePanel({ events, tasks, now, onToggleTask }: { events: CalendarEvent
           ))}
         </ul>
       </section>
+
+      {sources}
 
       <section aria-label="My Day">
         <h2 className="mb-1.5 flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wider text-fg-subtle">
@@ -611,6 +695,32 @@ function CalendarSettings({ onClose }: { onClose: () => void }) {
             {zones.map((z) => <option key={z} value={z}>{z.replace('_', ' ')}</option>)}
           </select>
         </div>
+        <div>
+          <p className="mb-1 text-2xs font-semibold uppercase tracking-wider text-fg-subtle">Working hours</p>
+          <div className="flex items-center gap-2 text-sm text-fg-muted">
+            <select aria-label="Work starts" value={prefs.workStart} onChange={(e) => setWorkingHours(Number(e.target.value), Math.max(Number(e.target.value) + 1, prefs.workEnd), prefs.workDays)} className="rounded-md border border-line bg-bg px-2 py-1 text-sm">
+              {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
+            </select>
+            <span>to</span>
+            <select aria-label="Work ends" value={prefs.workEnd} onChange={(e) => setWorkingHours(Math.min(prefs.workStart, Number(e.target.value) - 1), Number(e.target.value), prefs.workDays)} className="rounded-md border border-line bg-bg px-2 py-1 text-sm">
+              {Array.from({ length: 24 }, (_, h) => h + 1).map((h) => <option key={h} value={h}>{String(h % 24).padStart(2, '0')}:00</option>)}
+            </select>
+          </div>
+          <div className="mt-1.5 flex gap-1" role="group" aria-label="Working days">
+            {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((l, i) => {
+              const on = prefs.workDays.includes(i);
+              return (
+                <button key={i} type="button" aria-pressed={on} aria-label={['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][i]}
+                  onClick={() => setWorkingHours(prefs.workStart, prefs.workEnd, on ? prefs.workDays.filter((d) => d !== i) : [...prefs.workDays, i])}
+                  className={`h-7 w-7 rounded-full text-xs font-medium ${on ? 'bg-accent text-accent-fg' : 'border border-line text-fg-muted'}`}>{l}</button>
+              );
+            })}
+          </div>
+        </div>
+        <label className="flex items-center gap-2 text-sm text-fg">
+          <input type="checkbox" checked={prefs.showWeekNumbers} onChange={(e) => setShowWeekNumbers(e.target.checked)} />
+          Show week numbers
+        </label>
         <label className="flex items-center gap-2 text-sm text-fg">
           <input type="checkbox" checked={prefs.showTasksOnCalendar} onChange={(e) => setShowTasksOnCalendar(e.target.checked)} />
           Show tasks with a due date

@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { X, CalendarDays, Trash2 } from 'lucide-react';
-import type { CalendarEvent, Repeat } from '@/types';
+import type { Attendee, CalendarEvent, Contact, Repeat, RsvpStatus, ShowAs } from '@/types';
+import { RecipientField, type Recipient } from '@/components/RecipientField';
+import { isInvitedTo, summariseResponses } from '@/lib/invites';
 import { EVENT_COLORS } from '@/types';
 import { calendarsOf, DEFAULT_CALENDAR_ID, usePrefs } from '@/lib/prefs';
 import { allTimeZones, describeRepeat, instantToZonedWall, localTz, REMINDER_CHOICES, zonedWallToInstant } from '@/lib/calendar';
@@ -9,7 +11,13 @@ import { allTimeZones, describeRepeat, instantToZonedWall, localTz, REMINDER_CHO
 interface EventFormProps {
   open: boolean;
   onClose: () => void;
-  onSave: (draft: Omit<CalendarEvent, 'id'> & { id?: string }) => void;
+  /** `send` is true when the people on the invitation list should be told. */
+  onSave: (draft: Omit<CalendarEvent, 'id'> & { id?: string }, opts?: { send: boolean }) => void;
+  contacts?: Contact[];
+  me?: { email: string; name?: string };
+  /** An invitee answering from the event. */
+  onRespond?: (event: CalendarEvent, status: RsvpStatus) => void;
+  onExport?: (event: CalendarEvent) => void;
   /** `scope` tells a repeating event whether to remove one showing or the whole series. */
   onDelete?: (id: string, scope: 'one' | 'all') => void;
   editing: CalendarEvent | null;
@@ -23,6 +31,7 @@ interface EventFormProps {
 const WEEKDAY_LABELS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 type Ends = 'never' | 'until' | 'count';
+const OK_EMAIL = /^[^\s@<>"',;]+@[^\s@<>"',;]+\.[^\s@<>"',;]+$/;
 
 function toLocalInputValue(iso: string): string {
   const d = new Date(iso);
@@ -34,7 +43,7 @@ function fromLocalInputValue(v: string): string {
   return new Date(v).toISOString();
 }
 
-export function EventForm({ open, onClose, onSave, onDelete, editing, defaultStartISO, defaultEndISO, defaultAllDay, defaultTitle, defaultDescription }: EventFormProps) {
+export function EventForm({ open, onClose, onSave, onDelete, contacts = [], me, onRespond, onExport, editing, defaultStartISO, defaultEndISO, defaultAllDay, defaultTitle, defaultDescription }: EventFormProps) {
   const prefs = usePrefs();
   const zones = allTimeZones();
   const cals = calendarsOf(prefs);
@@ -56,10 +65,22 @@ export function EventForm({ open, onClose, onSave, onDelete, editing, defaultSta
   const [tz, setTz] = useState('');
   const [isPrivate, setIsPrivate] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [required, setRequired] = useState<Recipient[]>([]);
+  const [optional, setOptional] = useState<Recipient[]>([]);
+  const [showAs, setShowAs] = useState<ShowAs>('busy');
+  const [meetingUrl, setMeetingUrl] = useState('');
+  const submitMode = useRef<'send' | 'save'>('send');
+  const invited = !!editing && !!me && isInvitedTo(editing, me.email);
 
   useEffect(() => {
     if (!open) return;
     setConfirmDelete(false);
+    const toRecipients = (role: Attendee['role']) =>
+      (editing?.attendees ?? []).filter((a) => a.role === role).map((a) => ({ id: a.email, name: a.name || a.email, email: a.email }));
+    setRequired(toRecipients('required'));
+    setOptional(toRecipients('optional'));
+    setShowAs(editing?.showAs ?? 'busy');
+    setMeetingUrl(editing?.meetingUrl ?? '');
     const loadRepeat = (r?: Repeat) => {
       setFreq(r?.freq ?? '');
       setIntervalN(r?.interval ?? 1);
@@ -107,6 +128,14 @@ export function EventForm({ open, onClose, onSave, onDelete, editing, defaultSta
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!start || !end) return;
+    const previous = new Map((editing?.attendees ?? []).map((a) => [a.email.toLowerCase(), a.status] as const));
+    const attendees: Attendee[] = invited
+      ? editing?.attendees ?? []
+      : [
+          ...required.map((r) => ({ email: r.email, ...(r.name !== r.email ? { name: r.name } : {}), role: 'required' as const, status: previous.get(r.email.toLowerCase()) ?? ('needs' as const) })),
+          ...optional.map((r) => ({ email: r.email, ...(r.name !== r.email ? { name: r.name } : {}), role: 'optional' as const, status: previous.get(r.email.toLowerCase()) ?? ('needs' as const) })),
+        ];
+    const send = submitMode.current === 'send' && attendees.length > 0 && !invited;
     const zone = tz && tz !== localTz() && !allDay ? tz : '';
     const toIso = (v: string) => (zone ? zonedWallToInstant(v, zone).toISOString() : fromLocalInputValue(v));
     const startIso = toIso(start);
@@ -136,7 +165,13 @@ export function EventForm({ open, onClose, onSave, onDelete, editing, defaultSta
       reminders: reminders.length ? [...reminders].sort((a, b) => a - b) : undefined,
       tz: zone || undefined,
       visibility: isPrivate ? 'private' : undefined,
-    });
+      showAs: showAs === 'busy' ? undefined : showAs,
+      meetingUrl: meetingUrl.trim() || undefined,
+      uid: editing?.uid,
+      organizer: editing?.organizer,
+      myStatus: editing?.myStatus,
+      attendees: attendees.length ? attendees : undefined,
+    }, { send });
     onClose();
   };
 
@@ -175,16 +210,39 @@ export function EventForm({ open, onClose, onSave, onDelete, editing, defaultSta
           <form onSubmit={handleSubmit} className="max-h-[70vh] space-y-3 overflow-y-auto p-4 scrollbar-thin">
             <input
               autoFocus
+              disabled={invited}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Event title"
               className="w-full rounded-lg border border-line bg-bg px-3 py-2 text-sm font-medium outline-none focus:border-accent focus:ring-1 focus:ring-accent"
             />
 
+            {invited && editing && (
+              <div className="rounded-lg border border-line bg-bg p-3 text-sm" data-testid="invited-banner">
+                <p className="text-fg">
+                  Organised by <strong>{editing.organizer?.name || editing.organizer?.email}</strong>. Only they can change the time or the guest list.
+                </p>
+                <div className="mt-2 flex flex-wrap gap-1.5" role="group" aria-label="Your response">
+                  {(['accepted', 'tentative', 'declined'] as const).map((st) => (
+                    <button
+                      key={st}
+                      type="button"
+                      aria-pressed={editing.myStatus === st}
+                      onClick={() => onRespond?.(editing, st)}
+                      className={`rounded-full border px-3 py-1 text-xs font-medium ${editing.myStatus === st ? 'border-accent bg-accent/10 text-accent' : 'border-line text-fg-muted hover:bg-bg-muted'}`}
+                    >
+                      {{ accepted: 'Accept', tentative: 'Tentative', declined: 'Decline' }[st]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <label className="flex items-center gap-2 text-sm text-fg-muted">
               <input
                 type="checkbox"
                 checked={allDay}
+                disabled={invited}
                 onChange={(e) => setAllDay(e.target.checked)}
                 className="h-4 w-4 rounded border-line"
               />
@@ -199,6 +257,7 @@ export function EventForm({ open, onClose, onSave, onDelete, editing, defaultSta
                 <input
                   type={allDay ? 'date' : 'datetime-local'}
                   required
+                  disabled={invited}
                   value={allDay ? start.slice(0, 10) : start}
                   onChange={(e) => setStart(allDay ? `${e.target.value}T00:00` : e.target.value)}
                   className="w-full rounded-lg border border-line bg-bg px-2.5 py-1.5 text-sm outline-none focus:border-accent focus:ring-1 focus:ring-accent"
@@ -211,6 +270,7 @@ export function EventForm({ open, onClose, onSave, onDelete, editing, defaultSta
                 <input
                   type={allDay ? 'date' : 'datetime-local'}
                   required
+                  disabled={invited}
                   value={allDay ? end.slice(0, 10) : end}
                   onChange={(e) => setEnd(allDay ? `${e.target.value}T23:59` : e.target.value)}
                   className="w-full rounded-lg border border-line bg-bg px-2.5 py-1.5 text-sm outline-none focus:border-accent focus:ring-1 focus:ring-accent"
@@ -220,6 +280,7 @@ export function EventForm({ open, onClose, onSave, onDelete, editing, defaultSta
 
             <input
               value={location}
+              disabled={invited}
               onChange={(e) => setLocation(e.target.value)}
               placeholder="Location (optional)"
               className="w-full rounded-lg border border-line bg-bg px-3 py-2 text-sm outline-none focus:border-accent focus:ring-1 focus:ring-accent"
@@ -227,6 +288,7 @@ export function EventForm({ open, onClose, onSave, onDelete, editing, defaultSta
 
             <textarea
               value={description}
+              disabled={invited}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Description (optional)"
               rows={3}
@@ -247,6 +309,45 @@ export function EventForm({ open, onClose, onSave, onDelete, editing, defaultSta
                     style={{ backgroundColor: c, ...(color === c ? { boxShadow: `0 0 0 2px ${c}` } : {}) }}
                   />
                 ))}
+              </div>
+            </div>
+
+            {!invited && (
+              <div className="space-y-1 rounded-lg border border-line bg-bg px-2 py-1">
+                <RecipientField label="Required" recipients={required} contacts={contacts} placeholder="Invite people by email address"
+                  onAdd={(r) => OK_EMAIL.test(r.email) && setRequired((p) => (p.some((x) => x.email === r.email) ? p : [...p, r]))} onRemove={(id) => setRequired((p) => p.filter((x) => x.id !== id))} />
+                <RecipientField label="Optional" recipients={optional} contacts={contacts} placeholder="Optional guests"
+                  onAdd={(r) => OK_EMAIL.test(r.email) && setOptional((p) => (p.some((x) => x.email === r.email) ? p : [...p, r]))} onRemove={(id) => setOptional((p) => p.filter((x) => x.id !== id))} />
+              </div>
+            )}
+            {editing && (editing.attendees?.length ?? 0) > 0 && (
+              <div className="rounded-lg border border-line bg-bg p-2.5 text-xs" data-testid="tracking">
+                <p className="mb-1 font-medium text-fg">Responses: {summariseResponses(editing.attendees)}</p>
+                <ul className="space-y-0.5">
+                  {editing.attendees!.map((a) => (
+                    <li key={a.email} className="flex justify-between text-fg-muted">
+                      <span>{a.name || a.email}{a.role === 'optional' ? ' (optional)' : ''}</span>
+                      <span>{{ accepted: 'Accepted', tentative: 'Tentative', declined: 'Declined', needs: 'No response' }[a.status]}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label htmlFor="ev-showas" className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-fg-subtle">Show as</label>
+                <select id="ev-showas" value={showAs} onChange={(e) => setShowAs(e.target.value as ShowAs)} className="w-full rounded-lg border border-line bg-bg px-2.5 py-1.5 text-sm">
+                  <option value="free">Free</option>
+                  <option value="tentative">Tentative</option>
+                  <option value="busy">Busy</option>
+                  <option value="oof">Out of office</option>
+                  <option value="elsewhere">Working elsewhere</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="ev-url" className="mb-1 block text-2xs font-semibold uppercase tracking-wider text-fg-subtle">Meeting link</label>
+                <input id="ev-url" value={meetingUrl} disabled={invited} onChange={(e) => setMeetingUrl(e.target.value)} placeholder="https://" inputMode="url" className="w-full rounded-lg border border-line bg-bg px-2.5 py-1.5 text-sm" />
               </div>
             </div>
 
@@ -271,7 +372,7 @@ export function EventForm({ open, onClose, onSave, onDelete, editing, defaultSta
                 <select
                   id="ev-tz"
                   value={tz}
-                  disabled={allDay}
+                  disabled={allDay || invited}
                   onChange={(e) => {
                     // Keep the same instant: show it as the wall time in the zone being chosen.
                     const next = e.target.value;
@@ -297,6 +398,7 @@ export function EventForm({ open, onClose, onSave, onDelete, editing, defaultSta
               <select
                 id="ev-repeat"
                 value={freq}
+                disabled={invited}
                 onChange={(e) => {
                   const f = e.target.value as Repeat['freq'] | '';
                   setFreq(f);
@@ -422,12 +524,29 @@ export function EventForm({ open, onClose, onSave, onDelete, editing, defaultSta
               ) : (
                 <span />
               )}
-              <button
-                type="submit"
-                className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-accent-fg shadow-soft transition-all hover:brightness-105 active:scale-[0.98]"
-              >
-                {editing ? 'Save changes' : 'Create event'}
-              </button>
+              <div className="flex items-center gap-2">
+                {editing && onExport && (
+                  <button type="button" onClick={() => onExport(editing)} className="rounded-lg px-2.5 py-2 text-xs font-medium text-fg-muted hover:bg-bg-muted hover:text-fg">
+                    Download .ics
+                  </button>
+                )}
+                {(required.length > 0 || optional.length > 0) && !invited && (
+                  <button
+                    type="submit"
+                    onClick={() => { submitMode.current = 'save'; }}
+                    className="rounded-lg px-2.5 py-2 text-sm font-medium text-fg-muted hover:bg-bg-muted hover:text-fg"
+                  >
+                    Save without sending
+                  </button>
+                )}
+                <button
+                  type="submit"
+                  onClick={() => { submitMode.current = 'send'; }}
+                  className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-accent-fg shadow-soft transition-all hover:brightness-105 active:scale-[0.98]"
+                >
+                  {(required.length > 0 || optional.length > 0) && !invited ? (editing ? 'Send update' : 'Send') : editing ? 'Save changes' : 'Create event'}
+                </button>
+              </div>
             </div>
           </form>
         </motion.div>

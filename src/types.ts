@@ -68,6 +68,7 @@ export interface Email {
   importance?: Importance;
   pinned?: boolean;
   followUpAt?: string;
+  invite?: InvitePayload;
 }
 
 export interface ToastItem {
@@ -137,6 +138,38 @@ export interface CalendarEvent {
   tz?: string;
   /** Private events show only as "Busy" to anyone a calendar is shared with. */
   visibility?: 'default' | 'private';
+  /** How the time shows to others: Outlook's "Show as". Missing means busy. */
+  showAs?: ShowAs;
+  /** Link to an online meeting, if there is one. */
+  meetingUrl?: string;
+  /** Shared by everyone's copy of a meeting so replies and cancellations find it. */
+  uid?: string;
+  organizer?: { name: string; email: string };
+  attendees?: Attendee[];
+  /** Your own answer when someone else organised the meeting. */
+  myStatus?: RsvpStatus;
+}
+
+export type ShowAs = 'free' | 'tentative' | 'busy' | 'oof' | 'elsewhere';
+export type RsvpStatus = 'needs' | 'accepted' | 'tentative' | 'declined';
+export interface Attendee {
+  email: string;
+  name?: string;
+  role: 'required' | 'optional';
+  status: RsvpStatus;
+}
+
+/** A meeting invitation, reply or cancellation carried inside an encrypted message. */
+export interface InvitePayload {
+  method: 'REQUEST' | 'REPLY' | 'CANCEL';
+  uid: string;
+  /** Goes up each time the organiser changes the meeting. */
+  sequence: number;
+  event: Pick<CalendarEvent, 'title' | 'description' | 'location' | 'start' | 'end' | 'allDay' | 'tz' | 'repeat' | 'exdates' | 'meetingUrl'>;
+  organizer: { name: string; email: string };
+  attendees: Attendee[];
+  /** For a REPLY: who answered and how. */
+  response?: { email: string; name?: string; status: RsvpStatus };
 }
 
 export interface Repeat {

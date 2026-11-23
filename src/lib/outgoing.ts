@@ -1,6 +1,6 @@
 import { supabase } from '@/lib/supabase';
 import { encryptMessage, type PayloadAttachment } from '@/lib/crypto/envelope';
-import type { Email } from '@/types';
+import type { Email, InvitePayload } from '@/types';
 import { previewOf } from '@/lib/preview';
 import { parseRecipients, splitRecipients } from '@/lib/recipients';
 
@@ -39,6 +39,8 @@ export interface SendArgs {
   subject: string;
   body: string;
   attachments?: PayloadAttachment[];
+  /** A meeting invitation, reply or cancellation. Typhoonpost recipients get it as a card; others get the readable text. */
+  invite?: InvitePayload;
 }
 
 /**
@@ -46,7 +48,7 @@ export interface SendArgs {
  * browser encrypts to their own key (it never passes through an outside mail provider). Everyone
  * else goes through the mail provider, which has to see the message to send it.
  */
-export async function sendMessage({ userId, myAddress, to, cc = '', bcc = '', importance = 'normal', subject, body, attachments = [] }: SendArgs): Promise<SendOutcome> {
+export async function sendMessage({ userId, myAddress, to, cc = '', bcc = '', importance = 'normal', subject, body, attachments = [], invite }: SendArgs): Promise<SendOutcome> {
   const { toList, ccList, bccList, all: recipients } = splitRecipients(to, cc, bcc);
   const preview = previewOf(body);
 
@@ -67,6 +69,7 @@ export async function sendMessage({ userId, myAddress, to, cc = '', bcc = '', im
     ccAddresses: ccList,
     bccAddresses: bccList,
     importance,
+    ...(invite ? { invite } : {}),
     payloadAttachments: attachments,
   });
 
@@ -114,6 +117,7 @@ export async function sendMessage({ userId, myAddress, to, cc = '', bcc = '', im
           to: toList,
           cc: ccList,
           ...(importance !== 'normal' ? { importance } : {}),
+          ...(invite ? { invite } : {}),
           attachments,
         },
         keys.get(address)!,

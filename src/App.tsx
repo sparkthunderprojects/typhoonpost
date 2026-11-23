@@ -23,7 +23,7 @@ import {
   Tag,
   CheckSquare,
 } from 'lucide-react';
-import type { Email, FolderId, LabelId, FilterTab, Category, AppView, Contact, ContactGroup, CalendarEvent, Task, Attachment, Importance } from '@/types';
+import type { Email, InvitePayload, RsvpStatus, FolderId, LabelId, FilterTab, Category, AppView, Contact, ContactGroup, CalendarEvent, Task, Attachment, Importance } from '@/types';
 import { contactName, EVENT_COLORS } from '@/types';
 import {
   addSender, categoryDefs, folderName, folderTree, getPrefs, loadPrefs, markAutoReplied, newId, resetPrefs, saveRule, setIgnored,
@@ -75,6 +75,9 @@ import { AuthScreen } from '@/components/AuthScreen';
 import { sendMessage } from '@/lib/outgoing';
 import { RecoveryKeyScreen, UnlockScreen } from '@/components/KeyScreens';
 import { CalendarView } from '@/components/CalendarView';
+import { InviteCard } from '@/components/InviteCard';
+import { CalendarSources, type SourceStatus } from '@/components/CalendarSources';
+import { EventDetails } from '@/components/EventDetails';
 import { EventForm } from '@/components/EventForm';
 import { Sidebar } from '@/components/Sidebar';
 import { TopBar } from '@/components/TopBar';
@@ -88,6 +91,9 @@ import { Composer, type ComposerState, type ComposeData } from '@/components/Com
 import { conversationOf, isFocused, threadKey } from '@/lib/thread';
 import { downloadText, fileNameFor, printEmail, toEml } from '@/lib/export';
 import { followUpTaskTitle, followUpTimestamp } from '@/lib/followup';
+import { isInvitedTo, describeWhen, eventFromInvite, inviteBody, inviteSubject, newUid, pendingReplyUpdates, replyInvite, toInvite } from '@/lib/invites';
+import { toIcs, parseIcs } from '@/lib/ics';
+import { fetchIcsFeed } from '@/lib/db';
 import { dateKey, dueReminders, nextDue, REMINDER_CHOICES, shortTime } from '@/lib/calendar';
 import { buildReply, type ReplyMode } from '@/lib/reply';
 import { processMail } from '@/lib/privacy';
@@ -798,29 +804,135 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
   );
 
   const openEditEvent = useCallback((event: CalendarEvent, occurrenceStart?: Date) => {
+    if (event.id.startsWith('sub:')) {
+      setDetailsEvent(event);
+      return;
+    }
     setEditingEvent(event);
     setEditingOccurrence(occurrenceStart ?? null);
     setNewEventStart(undefined);
     setEventFormOpen(true);
   }, []);
 
+  const me = useMemo(() => {
+    const email = myAddress ?? userEmail;
+    return { email, name: email.split('@')[0] };
+  }, [myAddress, userEmail]);
+
+  /** Sends an invitation, reply or cancellation. Typhoonpost recipients get an encrypted card. */
+  const sendInviteMail = useCallback(
+    async (inv: InvitePayload, to: string[]) => {
+      const list = [...new Set(to.map((a) => a.trim()).filter((a) => a && a.toLowerCase() !== me.email.toLowerCase()))];
+      if (!list.length) return;
+      try {
+        const out = await sendMessage({
+          userId, myAddress: me.email, to: list.join(', '), subject: inviteSubject(inv), body: inviteBody(inv, describeWhen(inv.event)), invite: inv,
+        });
+        setEmails((prev) => [out.saved, ...prev]);
+        if (out.failed.length) push(`Could not reach ${out.failed.map((f) => f.address).join(', ')}`);
+      } catch {
+        push('Could not send the meeting message');
+      }
+    },
+    [userId, me.email, push],
+  );
+
   const saveEvent = useCallback(
-    (draft: Omit<CalendarEvent, 'id'> & { id?: string }) => {
-      const { id, ...rest } = draft;
+    (draft: Omit<CalendarEvent, 'id'> & { id?: string }, opts?: { send: boolean }) => {
+      const { id, ...rest0 } = draft;
+      const prev = id ? events.find((x) => x.id === id) : undefined;
+      let rest = rest0;
+      const hosting = !!rest.attendees?.length && (!rest.organizer || rest.organizer.email.toLowerCase() === me.email.toLowerCase());
+      if (hosting) rest = { ...rest, uid: rest.uid ?? newUid(), organizer: { name: me.name, email: me.email } };
+      const afterSave = (saved: CalendarEvent) => {
+        if (!hosting || !opts?.send) return;
+        const sequence = Math.floor(Date.now() / 1000);
+        const fresh = saved.attendees ?? [];
+        void sendInviteMail(toInvite(saved, 'REQUEST', saved.organizer!, prev ? sequence : 0), fresh.map((a) => a.email));
+        const removed = (prev?.attendees ?? []).filter((a) => !fresh.some((f) => f.email.toLowerCase() === a.email.toLowerCase()));
+        if (removed.length) void sendInviteMail(toInvite({ ...saved, attendees: removed }, 'CANCEL', saved.organizer!, sequence), removed.map((a) => a.email));
+        push(`Invitation sent to ${fresh.length} ${fresh.length === 1 ? 'person' : 'people'}`);
+      };
       if (id) {
-        setEvents((prev) => prev.map((ev) => (ev.id === id ? { id, ...rest } : ev)));
+        const saved = { id, ...rest };
+        setEvents((p) => p.map((ev) => (ev.id === id ? saved : ev)));
         updateEventDb(id, rest).catch(() => push('Failed to save event'));
-        push('Event updated');
+        if (!opts?.send || !hosting) push('Event updated');
+        afterSave(saved);
       } else {
         insertEventDb(userId, rest)
           .then((newEvent) => {
-            setEvents((prev) => [...prev, newEvent]);
-            push('Event created');
+            setEvents((p) => [...p, newEvent]);
+            if (!opts?.send || !hosting) push('Event created');
+            afterSave(newEvent);
           })
           .catch(() => push('Failed to create event'));
       }
     },
-    [push, userId],
+    [push, userId, events, me, sendInviteMail],
+  );
+
+  /** An invitee changes their answer from the event itself. */
+  const respondToEvent = useCallback(
+    (ev: CalendarEvent, status: RsvpStatus) => {
+      if (!ev.organizer || !ev.uid) return;
+      const next = { ...ev, myStatus: status, showAs: status === 'tentative' ? ('tentative' as const) : status === 'declined' ? ('free' as const) : ('busy' as const) };
+      setEvents((p) => p.map((x) => (x.id === ev.id ? next : x)));
+      setEditingEvent(next);
+      const { id: _id, ...rest } = next;
+      updateEventDb(ev.id, rest).catch(() => push('Failed to save your response'));
+      void sendInviteMail(replyInvite(toInvite(next, 'REQUEST', ev.organizer), me, status), [ev.organizer.email]);
+      push(`You responded: ${status}`);
+    },
+    [push, me, sendInviteMail],
+  );
+
+  /** Answering from the invitation card in your inbox. */
+  const respondToInvite = useCallback(
+    (inv: InvitePayload, status: RsvpStatus) => {
+      const existing = events.find((x) => x.uid === inv.uid);
+      if (status === 'declined') {
+        if (existing) {
+          setEvents((p) => p.filter((x) => x.id !== existing.id));
+          deleteEventRow(existing.id).catch(() => {});
+        }
+      } else if (existing) {
+        respondToEvent({ ...existing, ...eventFromInvite(inv, status, existing), id: existing.id } as CalendarEvent, status);
+        return;
+      } else {
+        insertEventDb(userId, eventFromInvite(inv, status))
+          .then((created) => setEvents((p) => [...p, created]))
+          .catch(() => push('Failed to add the meeting to your calendar'));
+      }
+      void sendInviteMail(replyInvite(inv, me, status), [inv.organizer.email]);
+      push(status === 'declined' ? 'Declined' : status === 'tentative' ? 'Marked tentative and added to your calendar' : 'Accepted and added to your calendar');
+    },
+    [events, userId, me, push, respondToEvent, sendInviteMail],
+  );
+
+  const removeCanceled = useCallback(
+    (inv: InvitePayload) => {
+      const existing = events.find((x) => x.uid === inv.uid);
+      if (!existing) return;
+      setEvents((p) => p.filter((x) => x.id !== existing.id));
+      deleteEventRow(existing.id).catch(() => {});
+      push('Removed from your calendar');
+    },
+    [events, push],
+  );
+
+  // Replies from guests update the meeting you organised. Applying them again changes nothing.
+  useEffect(() => {
+    for (const next of pendingReplyUpdates(events, emails)) {
+      setEvents((p) => p.map((x) => (x.id === next.id ? next : x)));
+      const { id: _id, ...rest } = next;
+      updateEventDb(next.id, rest).catch(() => {});
+    }
+  }, [events, emails]);
+
+  const exportEvents = useCallback(
+    (list: CalendarEvent[], name: string) => downloadText(`${name.replace(/[^\w.-]+/g, '_') || 'calendar'}.ics`, toIcs(list, { name }), 'text/calendar'),
+    [],
   );
 
   const deleteEvent = useCallback(
@@ -836,9 +948,14 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
       }
       setEvents((prev) => prev.filter((x) => x.id !== id));
       deleteEventRow(id).catch(() => {});
+      if (ev?.attendees?.length && ev.organizer && ev.organizer.email.toLowerCase() === me.email.toLowerCase()) {
+        void sendInviteMail(toInvite(ev, 'CANCEL', ev.organizer, Math.floor(Date.now() / 1000)), ev.attendees.map((a) => a.email));
+        push('Meeting canceled. Everyone invited has been told');
+        return;
+      }
       push('Event deleted');
     },
-    [events, editingOccurrence, push],
+    [events, editingOccurrence, push, me, sendInviteMail],
   );
 
   /** Moves one showing: a single event just moves; a repeating one gets that day skipped and a separate copy made. */
@@ -895,6 +1012,76 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
   const toggleTaskDone = useCallback(
     (t: Task) => updateTaskItemRef.current(t.done ? { ...t, done: false, completedAt: null } : { ...t, done: true, completedAt: new Date().toISOString() }),
     [],
+  );
+
+  // ---- Internet calendars (read-only) and .ics import ----
+  const [subEvents, setSubEvents] = useState<Record<string, CalendarEvent[]>>({});
+  const [subStatus, setSubStatus] = useState<Record<string, SourceStatus>>({});
+  const [importResult, setImportResult] = useState<string | undefined>(undefined);
+  const [detailsEvent, setDetailsEvent] = useState<CalendarEvent | null>(null);
+  const subscriptions = prefs.subscriptions;
+  const refreshSubscriptions = useCallback(async () => {
+    await Promise.all(
+      getPrefs().subscriptions.map(async (sub) => {
+        setSubStatus((p) => ({ ...p, [sub.id]: 'loading' }));
+        try {
+          const text = await fetchIcsFeed(sub.url);
+          const parsed = parseIcs(text, sub.color).events.map((e, i) => ({ ...e, id: `sub:${sub.id}:${i}`, color: sub.color, calendarId: `sub:${sub.id}` }));
+          setSubEvents((p) => ({ ...p, [sub.id]: parsed }));
+          setSubStatus((p) => ({ ...p, [sub.id]: 'ok' }));
+        } catch (e) {
+          const msg = e instanceof Error && e.message && !/non-2xx/i.test(e.message) ? e.message : 'Could not load this calendar';
+          setSubStatus((p) => ({ ...p, [sub.id]: { error: msg } }));
+        }
+      }),
+    );
+  }, []);
+  const subscriptionKey = subscriptions.map((x) => `${x.id}|${x.url}`).join(',');
+  useEffect(() => {
+    if (!subscriptionKey) return;
+    void refreshSubscriptions();
+    const t = window.setInterval(() => void refreshSubscriptions(), 30 * 60000);
+    return () => window.clearInterval(t);
+  }, [subscriptionKey, refreshSubscriptions]);
+  const subscribedVisible = useMemo(
+    () => subscriptions.filter((x) => x.visible).flatMap((x) => subEvents[x.id] ?? []),
+    [subscriptions, subEvents],
+  );
+
+  const importIcs = useCallback(
+    async (file: File) => {
+      try {
+        const { events: parsed, approximated, skipped } = parseIcs(await file.text());
+        const have = new Set(events.map((e) => e.uid).filter(Boolean));
+        const fresh = parsed.filter((e) => !e.uid || !have.has(e.uid));
+        const created: CalendarEvent[] = [];
+        for (const e of fresh) created.push(await insertEventDb(userId, e));
+        setEvents((p) => [...p, ...created]);
+        const bits = [`Imported ${created.length} event${created.length === 1 ? '' : 's'}`];
+        if (parsed.length - fresh.length) bits.push(`${parsed.length - fresh.length} already here`);
+        if (skipped) bits.push(`${skipped} could not be read`);
+        if (approximated) bits.push(`${approximated} repeat${approximated === 1 ? 's' : ''} simplified`);
+        setImportResult(bits.join(', '));
+        push(bits[0]);
+      } catch {
+        setImportResult('That file could not be imported');
+        push('That file could not be imported');
+      }
+    },
+    [events, userId, push],
+  );
+
+  const resizeOccurrence = useCallback(
+    (occ: { event: CalendarEvent; start: Date }, newEnd: Date) => {
+      const ev = occ.event;
+      if (ev.id.startsWith('sub:') || isInvitedTo(ev, me.email)) return;
+      const duration = newEnd.getTime() - occ.start.getTime();
+      const next = { ...ev, end: new Date(new Date(ev.start).getTime() + duration).toISOString() };
+      setEvents((p) => p.map((x) => (x.id === ev.id ? next : x)));
+      const { id: _id, ...rest } = next;
+      updateEventDb(ev.id, rest).catch(() => push('Failed to resize the event'));
+    },
+    [push, me.email],
   );
 
   // ---- Reminders: shown while the app is open ----
@@ -1635,6 +1822,17 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
             onAddToContacts={addSenderToContacts}
             onDownloadAttachment={downloadFile}
             onEditDraft={openDraft}
+            inviteCard={
+              activeEmail?.invite ? (
+                <InviteCard
+                  invite={activeEmail.invite}
+                  myAddress={me.email}
+                  existing={events.find((x) => x.uid === activeEmail.invite!.uid)}
+                  onRespond={(st) => respondToInvite(activeEmail.invite!, st)}
+                  onRemove={() => removeCanceled(activeEmail.invite!)}
+                />
+              ) : undefined
+            }
           />
           )}
         </div>
@@ -1647,6 +1845,17 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
       ) : view === 'calendar' ? (
         <CalendarView
           events={filterBy(events, eventQuery, eventMatches)}
+          subscribed={subscribedVisible}
+          onResizeOccurrence={resizeOccurrence}
+          sources={
+            <CalendarSources
+              onImport={(f) => void importIcs(f)}
+              onExport={() => exportEvents(events, 'typhoonpost-calendar')}
+              onRefresh={() => void refreshSubscriptions()}
+              status={subStatus}
+              importResult={importResult}
+            />
+          }
           tasks={tasks}
           onCreate={openNewEvent}
           onOpenEvent={openEditEvent}
@@ -1714,11 +1923,16 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
         signature={signature}
         contacts={contacts}
       />
+      <EventDetails event={detailsEvent} onClose={() => setDetailsEvent(null)} calendarName={detailsEvent ? subscriptions.find((x) => detailsEvent.id.startsWith(`sub:${x.id}:`))?.name : undefined} />
       <EventForm
         open={eventFormOpen}
         onClose={() => setEventFormOpen(false)}
         onSave={saveEvent}
         onDelete={deleteEvent}
+        contacts={contacts}
+        me={me}
+        onRespond={respondToEvent}
+        onExport={(ev) => exportEvents([ev], ev.title)}
         editing={editingEvent}
         defaultStartISO={newEventStart}
         defaultEndISO={newEventEnd}

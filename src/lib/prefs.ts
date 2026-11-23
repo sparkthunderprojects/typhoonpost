@@ -45,7 +45,15 @@ export interface Prefs {
   /** A second time zone shown beside the hours in Day and Week views. */
   secondaryTz: string;
   showTasksOnCalendar: boolean;
+  /** Internet calendars you subscribe to. Read-only; the events are fetched fresh and never stored. */
+  subscriptions: Subscription[];
+  workStart: number;
+  workEnd: number;
+  workDays: number[];
+  showWeekNumbers: boolean;
 }
+
+export interface Subscription { id: string; name: string; url: string; color: string; visible: boolean }
 
 export interface CalendarDef { id: string; name: string; color: string; visible: boolean }
 export const DEFAULT_CALENDAR_ID = 'default';
@@ -76,6 +84,11 @@ export const DEFAULT_PREFS: Prefs = {
   weekStartsOn: 1,
   secondaryTz: '',
   showTasksOnCalendar: true,
+  subscriptions: [],
+  workStart: 9,
+  workEnd: 17,
+  workDays: [1, 2, 3, 4, 5],
+  showWeekNumbers: false,
 };
 
 let state: Prefs = DEFAULT_PREFS;
@@ -305,3 +318,13 @@ export const removeCalendar = (id: string) =>
 export const setWeekStart = (weekStartsOn: 0 | 1) => updatePrefs((p) => ({ ...p, weekStartsOn }));
 export const setSecondaryTz = (secondaryTz: string) => updatePrefs((p) => ({ ...p, secondaryTz }));
 export const setShowTasksOnCalendar = (showTasksOnCalendar: boolean) => updatePrefs((p) => ({ ...p, showTasksOnCalendar }));
+export const addSubscription = (name: string, url: string, color: string): string => {
+  const id = newId();
+  updatePrefs((p) => ({ ...p, subscriptions: [...p.subscriptions, { id, name: name.trim() || 'Internet calendar', url: url.trim(), color, visible: true }] }));
+  return id;
+};
+export const editSubscription = (id: string, patch: Partial<Omit<Subscription, 'id'>>) =>
+  updatePrefs((p) => ({ ...p, subscriptions: p.subscriptions.map((x) => (x.id === id ? { ...x, ...patch } : x)) }));
+export const removeSubscription = (id: string) => updatePrefs((p) => ({ ...p, subscriptions: p.subscriptions.filter((x) => x.id !== id) }));
+export const setWorkingHours = (workStart: number, workEnd: number, workDays: number[]) => updatePrefs((p) => ({ ...p, workStart, workEnd, workDays }));
+export const setShowWeekNumbers = (showWeekNumbers: boolean) => updatePrefs((p) => ({ ...p, showWeekNumbers }));

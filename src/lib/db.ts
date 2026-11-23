@@ -6,7 +6,7 @@ import { openAttestation } from '@/lib/crypto/attest';
 import { fromBase64, toBase64 } from '@/lib/crypto/bytes';
 import { publicKeyOf } from '@/lib/crypto/keys';
 import { getPrivateKey } from '@/lib/crypto/keyStore';
-import type { Attachment, CalendarEvent, Contact, ContactGroup, Email, FolderId, LabelId, Category, Task } from '@/types';
+import type { Attachment, CalendarEvent, InvitePayload, Contact, ContactGroup, Email, FolderId, LabelId, Category, Task } from '@/types';
 import { initialEmails } from '@/data/mockEmails';
 import { initialContacts } from '@/data/mockContacts';
 
@@ -36,6 +36,7 @@ interface EmailRow {
   cc_addresses?: string[];
   bcc_addresses?: string[];
   importance?: 'high' | 'low';
+  invite?: InvitePayload;
   attachments?: AttachmentRow[];
   enc_version?: number | null;
   enc_payload?: string | null;
@@ -128,6 +129,7 @@ function openRow(row: EmailRow): EmailRow {
       cc_addresses: m.cc ?? [],
       bcc_addresses: m.bcc ?? [],
       importance: m.importance,
+      invite: m.invite as InvitePayload | undefined,
       attachments: m.attachments.map((a, i) => ({
         id: `${row.id}:${i}`,
         name: a.name,
@@ -148,7 +150,7 @@ function openRow(row: EmailRow): EmailRow {
   }
 }
 
-function rowToEmail(input: EmailRow): Email {
+export function rowToEmail(input: EmailRow): Email {
   const row = openRow(input);
   const { timestamp, date } = formatTimestamp(row.created_at);
   return {
@@ -186,6 +188,7 @@ function rowToEmail(input: EmailRow): Email {
     ccAddresses: row.cc_addresses ?? [],
     bccAddresses: row.bcc_addresses ?? [],
     importance: row.importance ?? 'normal',
+    ...(row.invite ? { invite: row.invite } : {}),
   };
 }
 
@@ -301,6 +304,7 @@ function encryptedEmailRow(userId: string, email: NewEmail, recipientPublicKey: 
       cc: email.ccAddresses ?? [],
       ...(email.bccAddresses?.length ? { bcc: email.bccAddresses } : {}),
       ...(email.importance && email.importance !== 'normal' ? { importance: email.importance } : {}),
+      ...(email.invite ? { invite: email.invite } : {}),
       attachments: email.payloadAttachments ?? [],
     },
     recipientPublicKey,
@@ -487,6 +491,12 @@ export function eventPayload(e: Omit<CalendarEvent, 'id'>): Omit<CalendarEvent, 
     ...(e.reminders?.length ? { reminders: e.reminders } : {}),
     ...(e.tz ? { tz: e.tz } : {}),
     ...(e.visibility && e.visibility !== 'default' ? { visibility: e.visibility } : {}),
+    ...(e.showAs && e.showAs !== 'busy' ? { showAs: e.showAs } : {}),
+    ...(e.meetingUrl ? { meetingUrl: e.meetingUrl } : {}),
+    ...(e.uid ? { uid: e.uid } : {}),
+    ...(e.organizer ? { organizer: e.organizer } : {}),
+    ...(e.attendees?.length ? { attendees: e.attendees } : {}),
+    ...(e.myStatus ? { myStatus: e.myStatus } : {}),
   };
 }
 
@@ -834,4 +844,12 @@ export async function updateTask(id: string, t: TaskPayload): Promise<void> {
 export async function deleteTaskRow(id: string): Promise<void> {
   const { error } = await supabase.from('tasks').delete().eq('id', id);
   if (error) throw error;
+}
+
+/** Fetches a public calendar feed through the server, which only ever sees the feed's address. */
+export async function fetchIcsFeed(url: string): Promise<string> {
+  const { data, error } = await supabase.functions.invoke('fetch-ics', { body: { url } });
+  if (error) throw error;
+  if (!data || typeof data.ics !== 'string') throw new Error(data?.error ?? 'No calendar came back');
+  return data.ics;
 }
