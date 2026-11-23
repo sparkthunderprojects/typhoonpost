@@ -1,6 +1,6 @@
 # Zero-access encryption: Stage 0 spec
 
-Status: draft for review. Nothing in this document is built yet.
+Status: Stage 1 (key infrastructure) is built and tested. Stages 2 to 5 are not started.
 
 ## 1. The claim
 
@@ -26,7 +26,7 @@ The public website must not use the words "zero-access" until Stage 4 ships, and
 
 Audited, pure-TypeScript libraries only (`@noble/curves`, `@noble/ciphers`, `@noble/hashes`, plus an Argon2id implementation). They run in the browser and in Deno edge functions, which the inbound function needs. No custom cryptography.
 
-- Password hardening: Argon2id, 64 MiB memory, 3 passes, 1 lane, per-user random 16-byte salt. Parameters stored with the salt so they can be raised later.
+- Password hardening: Argon2id, 64 MiB memory, 3 passes, 1 lane, salt derived from the account email. The browser has to derive the sign-in secret before it can read anything from the server, so a stored random salt would need an unauthenticated lookup that reveals which emails have accounts. Argon2id takes about one second in a desktop browser; it still needs timing on a mid-range phone.
 - Key agreement: X25519.
 - Symmetric encryption: XChaCha20-Poly1305 with a random 24-byte nonce.
 - Key derivation: HKDF-SHA-256.
@@ -40,7 +40,7 @@ Audited, pure-TypeScript libraries only (`@noble/curves`, `@noble/ciphers`, `@no
 5. The private key is stored twice, each wrapped with XChaCha20-Poly1305: once under `wrapKey`, once under the recovery key.
 6. The recovery key is shown once as grouped base32 text, with a required "I saved it" step. It is never sent to the server.
 
-Table `user_keys`: `user_id`, `public_key`, `wrapped_by_password`, `wrapped_by_recovery`, `kdf_salt`, `kdf_params`, `version`. Row-level security limits each user to their own row. Public keys of local mailboxes are readable by signed-in users, so Typhoonpost-to-Typhoonpost mail can be encrypted to a recipient.
+Table `user_keys`: `user_id`, `public_key`, `wrapped_by_password`, `wrapped_by_recovery`, `version`. The public key cannot be changed once set. Row-level security limits each user to their own row. Public keys of local mailboxes are readable by signed-in users, so Typhoonpost-to-Typhoonpost mail can be encrypted to a recipient.
 
 ## 4. Message envelope, version 1
 
@@ -63,6 +63,13 @@ Table `user_keys`: `user_id`, `public_key`, `wrapped_by_password`, `wrapped_by_r
 - **Lost password, recovery key present:** unwrap with the recovery key, set a new password, re-wrap.
 - **Lost both:** account is unrecoverable by design.
 - **Two-factor:** continues to gate database access. It does not protect keys, and the UI must not imply it does.
+
+### Stage 1 as built
+
+- Keys are created at first sign-in, not at sign-up, so it works whether or not email confirmation is on.
+- Accounts that predate this change are upgraded in place: if the derived sign-in fails, the app retries once with the plain password, then replaces the server-side password with the derived secret and creates keys. This fallback (`LEGACY_PASSWORD_LOGIN` in `useAuth.ts`) must be switched off before real users are invited, because it sends the typed password to the server on that attempt.
+- Forgot password: the reset email signs the person in, then the app asks for the recovery key and a new password. The key wrap is saved first and the sign-in secret second, so if the second step fails the recovery key still works.
+- Existing mail stays plaintext until Stage 2 and Stage 5 encrypt and then migrate it.
 
 ## 6. Consequences to design for
 
@@ -89,7 +96,5 @@ Table `user_keys`: `user_id`, `public_key`, `wrapped_by_password`, `wrapped_by_r
 
 ## 9. Open questions
 
-1. Confirm decisions 2 and 3.
-2. Session key persistence across reloads.
-3. Thread key approach.
-4. Which Argon2id implementation, after measuring speed on a mid-range phone.
+1. Decisions 2 and 3, session-persisted key and header-based thread key: owner agreed to the recommendations.
+2. Which Argon2id implementation, after measuring speed on a mid-range phone.

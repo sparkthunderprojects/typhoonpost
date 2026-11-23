@@ -14,6 +14,7 @@ interface SettingsModalProps {
   onChangeAddress?: (handle: string) => Promise<string>;
   onExportData?: () => Promise<void>;
   onAccountDeleted?: () => void;
+  onChangePassword?: (current: string, next: string) => Promise<void>;
 }
 
 export function SettingsModal({
@@ -27,6 +28,7 @@ export function SettingsModal({
   onChangeAddress,
   onExportData,
   onAccountDeleted,
+  onChangePassword,
 }: SettingsModalProps) {
   const [editing, setEditing] = useState(false);
   const [handle, setHandle] = useState('');
@@ -133,7 +135,7 @@ export function SettingsModal({
               </div>
             )}
             {onExportData && onAccountDeleted && (
-              <PrivacySettings accountEmail={accountEmail} onExportData={onExportData} onAccountDeleted={onAccountDeleted} />
+              <PrivacySettings accountEmail={accountEmail} onExportData={onExportData} onAccountDeleted={onAccountDeleted} onChangePassword={onChangePassword} />
             )}
             <div className="p-4">
               <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-fg-subtle">

@@ -6,9 +6,10 @@ import { isSupabaseConfigured } from '@/lib/supabase';
 interface AuthScreenProps {
   onSignIn: (email: string, password: string) => Promise<void>;
   onSignUp: (email: string, password: string) => Promise<void>;
+  onForgotPassword?: (email: string) => Promise<void>;
 }
 
-export function AuthScreen({ onSignIn, onSignUp }: AuthScreenProps) {
+export function AuthScreen({ onSignIn, onSignUp, onForgotPassword }: AuthScreenProps) {
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -78,7 +79,7 @@ export function AuthScreen({ onSignIn, onSignUp }: AuthScreenProps) {
             {[
               { Icon: Inbox, title: 'Focused inbox', text: 'What matters first, the rest one tap away.' },
               { Icon: CalendarDays, title: 'Built-in calendar', text: 'Plan your day without leaving your mail.' },
-              { Icon: ShieldCheck, title: 'Private by design', text: 'Your mailbox is only ever visible to you.' },
+              { Icon: ShieldCheck, title: 'Private by design', text: 'Trackers blocked and links checked before you open them.' },
             ].map(({ Icon, title, text }) => (
               <li key={title} className="flex items-start gap-3">
                 <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/15">
@@ -137,7 +138,7 @@ export function AuthScreen({ onSignIn, onSignUp }: AuthScreenProps) {
                   id="password"
                   type={showPassword ? 'text' : 'password'}
                   required
-                  minLength={6}
+                  minLength={mode === 'signup' ? 8 : 1}
                   autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -154,6 +155,29 @@ export function AuthScreen({ onSignIn, onSignUp }: AuthScreenProps) {
                 </button>
               </div>
             </div>
+
+            {mode === 'signin' && onForgotPassword && (
+              <button
+                type="button"
+                onClick={async () => {
+                  setError(null);
+                  setNotice(null);
+                  if (!email) {
+                    setError('Enter your email above first, then choose "Forgot password".');
+                    return;
+                  }
+                  try {
+                    await onForgotPassword(email);
+                    setNotice('If that address has an account, we have sent a link to reset your password. You will need your recovery key.');
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : 'Something went wrong');
+                  }
+                }}
+                className="text-sm text-accent hover:underline"
+              >
+                Forgot password?
+              </button>
+            )}
 
             {error && (
               <p role="alert" className="rounded-md bg-danger/10 px-3 py-2 text-sm text-danger">

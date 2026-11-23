@@ -51,6 +51,7 @@ import {
   deleteEventRow,
 } from '@/lib/db';
 import { AuthScreen } from '@/components/AuthScreen';
+import { RecoveryKeyScreen, UnlockScreen } from '@/components/KeyScreens';
 import { CalendarView } from '@/components/CalendarView';
 import { EventForm } from '@/components/EventForm';
 import { Sidebar } from '@/components/Sidebar';
@@ -82,9 +83,10 @@ interface MailAppProps {
   userId: string;
   userEmail: string;
   onSignOut: () => void;
+  onChangePassword: (current: string, next: string) => Promise<void>;
 }
 
-function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
+function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProps) {
   const { theme, toggle } = useTheme();
   const { toasts, push, dismiss } = useToasts();
 
@@ -1020,6 +1022,7 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
         onChangeAddress={changeAddress}
         onExportData={exportData}
         onAccountDeleted={onSignOut}
+        onChangePassword={onChangePassword}
       />
       <ContactForm
         open={contactFormOpen}
@@ -1050,11 +1053,23 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
 }
 
 export default function App() {
-  const { user, loading, mfaRequired, verifyMfa, signInWithPassword, signUpWithPassword, signOut } = useAuth();
+  const auth = useAuth();
+  const {
+    user,
+    loading,
+    mfaRequired,
+    verifyMfa,
+    signInWithPassword,
+    signUpWithPassword,
+    signOut,
+    requestPasswordReset,
+  } = auth;
 
-  if (!isSupabaseConfigured) {
-    return <AuthScreen onSignIn={signInWithPassword} onSignUp={signUpWithPassword} />;
-  }
+  const authScreen = (
+    <AuthScreen onSignIn={signInWithPassword} onSignUp={signUpWithPassword} onForgotPassword={requestPasswordReset} />
+  );
+
+  if (!isSupabaseConfigured) return authScreen;
 
   if (loading) {
     return (
@@ -1064,13 +1079,36 @@ export default function App() {
     );
   }
 
-  if (!user) {
-    return <AuthScreen onSignIn={signInWithPassword} onSignUp={signUpWithPassword} />;
-  }
+  if (!user) return authScreen;
 
   if (mfaRequired) {
     return <MfaScreen onVerify={verifyMfa} onSignOut={signOut} />;
   }
 
-  return <MailApp key={user.id} userId={user.id} userEmail={user.email ?? ''} onSignOut={signOut} />;
+  if (auth.passwordRecovery || auth.keyStatus === 'locked') {
+    return (
+      <UnlockScreen
+        key={auth.passwordRecovery ? 'reset' : 'unlock'}
+        initialMode={auth.passwordRecovery ? 'reset' : 'unlock'}
+        error={auth.keyError}
+        onUnlock={auth.unlock}
+        onReset={auth.resetWithRecoveryKey}
+        onSignOut={signOut}
+      />
+    );
+  }
+
+  if (auth.recoveryKey) {
+    return <RecoveryKeyScreen recoveryKey={auth.recoveryKey} onDone={auth.acknowledgeRecoveryKey} />;
+  }
+
+  return (
+    <MailApp
+      key={user.id}
+      userId={user.id}
+      userEmail={user.email ?? ''}
+      onSignOut={signOut}
+      onChangePassword={auth.changePassword}
+    />
+  );
 }

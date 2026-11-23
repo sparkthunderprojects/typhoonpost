@@ -6,6 +6,7 @@ interface PrivacySettingsProps {
   accountEmail?: string;
   onExportData: () => Promise<void>;
   onAccountDeleted: () => void;
+  onChangePassword?: (current: string, next: string) => Promise<void>;
 }
 
 const sectionLabel = 'mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-fg-subtle';
@@ -13,7 +14,66 @@ const primaryBtn =
   'flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-accent-fg disabled:opacity-60';
 const quietBtn = 'rounded-lg px-3 py-1.5 text-xs font-medium text-fg-muted hover:bg-bg-muted';
 
-export function PrivacySettings({ onExportData, onAccountDeleted }: PrivacySettingsProps) {
+function PasswordSection({ onChangePassword }: { onChangePassword: (current: string, next: string) => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const field =
+    'h-9 w-full rounded-md border border-line-strong bg-bg px-3 text-sm outline-none focus:border-accent focus:ring-2 focus:ring-accent/25';
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setMsg(null);
+    try {
+      await onChangePassword(current, next);
+      setMsg({ ok: true, text: 'Password changed. Your recovery key still works.' });
+      setCurrent('');
+      setNext('');
+      setOpen(false);
+    } catch (err) {
+      setMsg({ ok: false, text: err instanceof Error ? err.message : 'Could not change your password.' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="border-t border-line px-6 py-4">
+      <p className={sectionLabel}>
+        <ShieldCheck size={13} /> Password and recovery
+      </p>
+      <p className="mb-3 text-xs text-fg-muted">
+        Your password unlocks your mail. Changing it keeps your mail and your recovery key exactly as they are.
+      </p>
+      {open ? (
+        <form onSubmit={submit} className="space-y-2">
+          <input aria-label="Current password" type="password" required autoComplete="current-password" placeholder="Current password" value={current} onChange={(e) => setCurrent(e.target.value)} className={field} />
+          <input aria-label="New password" type="password" required minLength={8} autoComplete="new-password" placeholder="New password (8+ characters)" value={next} onChange={(e) => setNext(e.target.value)} className={field} />
+          <div className="flex gap-2">
+            <button type="submit" disabled={busy} className={primaryBtn}>
+              {busy && <Loader2 size={12} className="animate-spin" />} Change password
+            </button>
+            <button type="button" onClick={() => setOpen(false)} className={quietBtn}>Cancel</button>
+          </div>
+        </form>
+      ) : (
+        <button type="button" onClick={() => { setOpen(true); setMsg(null); }} className={primaryBtn}>
+          Change password
+        </button>
+      )}
+      {msg && (
+        <p role={msg.ok ? 'status' : 'alert'} className={`mt-2 text-xs ${msg.ok ? 'text-success' : 'text-danger'}`}>
+          {msg.text}
+        </p>
+      )}
+    </div>
+  );
+}
+
+export function PrivacySettings({ onExportData, onAccountDeleted, onChangePassword }: PrivacySettingsProps) {
   // ---- Two-factor ----
   const [factorId, setFactorId] = useState<string | null>(null);
   const [loadingFactors, setLoadingFactors] = useState(true);
@@ -126,6 +186,7 @@ export function PrivacySettings({ onExportData, onAccountDeleted }: PrivacySetti
 
   return (
     <>
+      {onChangePassword && <PasswordSection onChangePassword={onChangePassword} />}
       <div className="border-b border-line p-4">
         <label className={sectionLabel}>
           <ShieldCheck className="h-3.5 w-3.5" /> Two-factor sign-in
