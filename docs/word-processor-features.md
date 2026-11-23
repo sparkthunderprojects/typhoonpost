@@ -220,7 +220,6 @@ All features run in the browser. Nothing here sends document text to a server.
 - Insert a date with @ and a date picker (P1)
 - Link to a calendar event (P1)
 - Embed a task list (P5)
-- Create a task from selected text (P1)
 - Insert quoted email or whole email thread (P1)
 - Slash menu to insert any block (P1)
 - Markdown shortcuts as you type (P1)

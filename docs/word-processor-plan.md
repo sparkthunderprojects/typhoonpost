@@ -1,6 +1,6 @@
 # Typhoonpost Documents: word processor plan
 
-Status: plan only. Nothing is built. The full feature list is in `word-processor-features.md`: 399 features across 18 areas. Decisions marked "Owner" need an answer before Phase 1.
+Status: plan only. Nothing is built. The full feature list is in `word-processor-features.md`: 398 features across 18 areas. Decisions marked "Owner" need an answer before Phase 1.
 
 ## 1. What we are building
 
@@ -31,9 +31,9 @@ Reasons to keep TipTap/ProseMirror: it is already in the project, its document m
 
 ## 4. Feature set
 
-The complete catalogue is `word-processor-features.md`: **399 features**, each tagged with its phase. By phase: P1 167, P2 112, P3 11, P4 24, P5 85. The lists below are the original summary and the catalogue supersedes them wherever they differ.
+The complete catalogue is `word-processor-features.md`: **398 features**, each tagged with its phase. By phase: P1 166, P2 112, P3 11, P4 24, P5 85. The lists below are the original summary and the catalogue supersedes them wherever they differ.
 
-Because Phase 1 now holds 167 features, it is split into three releases that each ship on their own: **1a** (the writing essentials: formatting, styles, lists, tables, images, find and replace, autosave, document list, encrypted storage, PDF and Word export, about 90 features), **1b** (import, templates, version history, search, mail links, security items) and **1c** (the rest of Phase 1). The website only claims a feature once its release has shipped.
+Because Phase 1 now holds 166 features, it is split into three releases that each ship on their own: **1a** (the writing essentials: formatting, styles, lists, tables, images, find and replace, autosave, document list, encrypted storage, PDF and Word export, about 90 features), **1b** (import, templates, version history, search, mail links, security items) and **1c** (the rest of Phase 1). The website only claims a feature once its release has shipped.
 
 ### Core writing (Phase 1)
 - Rich text: the same formatting the composer offers, built again inside the Documents editor, plus strikethrough, small caps, line spacing, paragraph spacing, indents, block quotes, code blocks, horizontal rule, special characters.
