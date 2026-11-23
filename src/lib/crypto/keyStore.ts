@@ -1,4 +1,4 @@
-import { fromBase64, toBase64 } from './bytes';
+import { fromBase64, toBase64 } from './bytes.ts';
 
 /**
  * Holds the unlocked private key for this browser tab. It lives in memory and is mirrored to

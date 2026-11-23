@@ -1,6 +1,6 @@
 # Zero-access encryption: Stage 0 spec
 
-Status: Stage 1 (key infrastructure) is built and tested. Stages 2 to 5 are not started.
+Status: Stage 1 (key infrastructure) and Stage 2 (encrypted inbound) are built and tested. Stages 3 to 5 are not started.
 
 ## 1. The claim
 
@@ -47,7 +47,7 @@ Table `user_keys`: `user_id`, `public_key`, `wrapped_by_password`, `wrapped_by_r
 - Per message: random 32-byte content key (CEK).
 - Payload JSON (subject, from, to, cc, bcc, reply-to, text body, HTML body, snippet, selected headers, attachment manifest) is encrypted with the CEK.
 - The CEK is sealed to the recipient's public key: ephemeral X25519 key, ECDH, HKDF, then AEAD.
-- Stored columns: `enc_version smallint`, `enc_payload bytea`, `enc_key bytea`. Readable columns: id, mailbox, received_at, folder, is_read, is_flagged, size_bytes.
+- Stored columns: `enc_version smallint`, `enc_payload text`, `enc_key text` (both base64). Readable columns: id, owner, created_at, folder, read, starred, labels, snooze time, size_bytes. The Focused/Other category is decided at arrival and kept inside the payload.
 - Attachments: separate CEK per file, ciphertext in the storage bucket, name and type inside the encrypted payload.
 - The version field allows the format to change without breaking old mail.
 
@@ -71,6 +71,14 @@ Table `user_keys`: `user_id`, `public_key`, `wrapped_by_password`, `wrapped_by_r
 - Forgot password: the reset email signs the person in, then the app asks for the recovery key and a new password. The key wrap is saved first and the sign-in secret second, so if the second step fails the recovery key still works.
 - Existing mail stays plaintext until Stage 2 and Stage 5 encrypt and then migrate it.
 
+### Stage 2 as built
+
+- `resend-inbound` encrypts every message to the recipient's public key and stores no readable subject, sender, recipients, body, preview or attachment names. Tested under Deno: stored rows contain none of the content, retried webhooks do not duplicate, each recipient gets their own ciphertext, and a different key cannot open it.
+- An account with no keys yet (a legacy account that has not signed in since the upgrade) gets nothing stored. The function answers 503 so Resend retries. If the account is still keyless when Resend stops retrying, that message is lost; this only affects the two pre-existing accounts, and only until they sign in once.
+- The browser decrypts on read (`src/lib/db.ts`). A message that cannot be decrypted shows a clear placeholder instead of breaking the list. This was planned for Stage 3 but moved here so new mail is never shown blank.
+- Attachment files are still not stored, only names and sizes (inside the payload). Real attachment storage is Stage 4.
+- The edge function shares `bytes.ts`, `seal.ts` and `envelope.ts` with the web app through a sync script (`scripts/sync-edge-crypto.mjs`); a test fails if the copies drift.
+
 ## 6. Consequences to design for
 
 - No server-side search, rules or forwarding on content.
@@ -82,7 +90,7 @@ Table `user_keys`: `user_id`, `public_key`, `wrapped_by_password`, `wrapped_by_r
 
 - **Stage 1: key infrastructure.** Derived sign-in, key generation, recovery key screen, password change, `user_keys` table.
 - **Stage 2: encrypted inbound.** Envelope v1, schema columns, `resend-inbound` encrypts.
-- **Stage 3: decrypt, compose, send.** Reader, drafts, sent copies, Typhoonpost-to-Typhoonpost end-to-end.
+- **Stage 3: write paths.** Drafts and sent copies encrypted by the browser, Typhoonpost-to-Typhoonpost end-to-end. (Reading and decrypting already shipped in Stage 2.)
 - **Stage 4: search, contacts, calendar, attachments.** Client index and encrypted contacts, events and files.
 - **Stage 5: remove plaintext and harden.** Drop plaintext columns, purge backups, key rotation, lockout tests, outside review, then update the website.
 

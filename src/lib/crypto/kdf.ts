@@ -1,7 +1,7 @@
 import { argon2idAsync } from '@noble/hashes/argon2.js';
 import { hkdf } from '@noble/hashes/hkdf.js';
 import { sha256 } from '@noble/hashes/sha2.js';
-import { toBase64, utf8 } from './bytes';
+import { toBase64, utf8 } from './bytes.ts';
 
 /**
  * Argon2id parameters. Memory is in KiB. These are stored alongside the account's keys so they

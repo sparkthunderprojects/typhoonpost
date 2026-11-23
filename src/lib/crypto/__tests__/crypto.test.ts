@@ -126,3 +126,69 @@ describe('sealed box', () => {
     expect(Buffer.from(sealed).includes(Buffer.from('SECRET-MARKER'))).toBe(false);
   });
 });
+
+import { decryptMessage, encryptMessage, type MessagePayload } from '../envelope';
+
+describe('message envelope', () => {
+  const sample: MessagePayload = {
+    sender: 'Ada Lovelace',
+    senderEmail: 'ada@example.org',
+    avatarColor: '#0F6CBD',
+    subject: 'Quarterly numbers — ünïcode ✓',
+    preview: 'Hi Jane, the numbers are attached.',
+    body: '<p>Hi Jane, <b>SECRET-BODY-TEXT</b></p>',
+    category: 'primary',
+    to: ['jane@typhoonpost.com'],
+    cc: [],
+    attachments: [{ name: 'q3-budget.xlsx', size: '24 KB', kind: 'sheet' }],
+  };
+
+  it('round-trips every field', () => {
+    const sk = randomBytes(32);
+    const enc = encryptMessage(sample, publicKeyOf(sk));
+    expect(decryptMessage(enc, sk)).toEqual(sample);
+  });
+
+  it('keeps content out of the stored form', () => {
+    const sk = randomBytes(32);
+    const enc = encryptMessage(sample, publicKeyOf(sk));
+    const stored = JSON.stringify(enc);
+    const raw = Buffer.from(enc.payload, 'base64').toString('latin1') + Buffer.from(enc.key, 'base64').toString('latin1');
+    for (const secret of ['SECRET-BODY-TEXT', 'Quarterly', 'ada@example.org', 'q3-budget']) {
+      expect(stored).not.toContain(secret);
+      expect(raw).not.toContain(secret);
+    }
+  });
+
+  it('fails closed for the wrong key, tampering, and unknown versions', () => {
+    const sk = randomBytes(32);
+    const enc = encryptMessage(sample, publicKeyOf(sk));
+    expect(() => decryptMessage(enc, randomBytes(32))).toThrow();
+    const raw = fromBase64(enc.payload);
+    raw[raw.length - 1] ^= 1;
+    expect(() => decryptMessage({ ...enc, payload: toBase64(raw) }, sk)).toThrow();
+    // A payload from one message cannot be paired with another message's key.
+    const other = encryptMessage(sample, publicKeyOf(sk));
+    expect(() => decryptMessage({ ...enc, key: other.key }, sk)).toThrow();
+    expect(() => decryptMessage({ ...enc, version: 2 }, sk)).toThrow(/Unsupported/);
+  });
+
+  it('uses a fresh key and nonce every time', () => {
+    const pk = publicKeyOf(randomBytes(32));
+    const a = encryptMessage(sample, pk);
+    const b = encryptMessage(sample, pk);
+    expect(a.payload).not.toBe(b.payload);
+    expect(a.key).not.toBe(b.key);
+  });
+});
+
+import { readFileSync } from 'node:fs';
+describe('edge function copy', () => {
+  it('shares the crypto files byte for byte with the web app', () => {
+    for (const f of ['bytes.ts', 'seal.ts', 'envelope.ts']) {
+      expect(readFileSync(`supabase/functions/resend-inbound/crypto/${f}`, 'utf8')).toBe(
+        readFileSync(`src/lib/crypto/${f}`, 'utf8'),
+      );
+    }
+  });
+});

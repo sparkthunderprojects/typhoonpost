@@ -1,9 +1,5 @@
-import { xchacha20poly1305 } from '@noble/ciphers/chacha.js';
-import { x25519 } from '@noble/curves/ed25519.js';
-import { hkdf } from '@noble/hashes/hkdf.js';
-import { sha256 } from '@noble/hashes/sha2.js';
-import { randomBytes } from '@noble/hashes/utils.js';
-import { concat, utf8 } from './bytes';
+import { hkdf, randomBytes, sha256, x25519, xchacha20poly1305 } from './noble.ts';
+import { concat, utf8 } from './bytes.ts';
 
 /**
  * Anonymous public-key encryption ("sealed box"). Anyone with the recipient's public key can

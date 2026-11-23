@@ -1,4 +1,6 @@
 import { supabase } from '@/lib/supabase';
+import { decryptMessage } from '@/lib/crypto/envelope';
+import { getPrivateKey } from '@/lib/crypto/keyStore';
 import type { Attachment, CalendarEvent, Contact, ContactGroup, Email, FolderId, LabelId, Category } from '@/types';
 import { initialEmails } from '@/data/mockEmails';
 import { initialContacts } from '@/data/mockContacts';
@@ -25,6 +27,10 @@ interface EmailRow {
   created_at: string;
   to_addresses?: string[] | null;
   attachments?: AttachmentRow[];
+  enc_version?: number | null;
+  enc_payload?: string | null;
+  enc_key?: string | null;
+  size_bytes?: number | null;
 }
 
 interface AttachmentRow {
@@ -79,7 +85,47 @@ function formatTimestamp(iso: string): { timestamp: string; date: string } {
   return { timestamp, date };
 }
 
-function rowToEmail(row: EmailRow): Email {
+/**
+ * Messages stored for an account with keys keep their content in an encrypted envelope; the
+ * readable columns are empty. Fill them back in here, in the browser.
+ */
+function openRow(row: EmailRow): EmailRow {
+  if (row.enc_version == null || !row.enc_payload || !row.enc_key) return row;
+  const key = getPrivateKey();
+  try {
+    if (!key) throw new Error('locked');
+    const m = decryptMessage({ version: row.enc_version, payload: row.enc_payload, key: row.enc_key }, key);
+    return {
+      ...row,
+      sender: m.sender,
+      sender_email: m.senderEmail,
+      avatar_color: m.avatarColor,
+      subject: m.subject,
+      preview: m.preview,
+      body: m.body,
+      category: m.category,
+      to_addresses: m.to,
+      attachments: m.attachments.map((a, i) => ({
+        id: `${row.id}:${i}`,
+        name: a.name,
+        size: a.size,
+        kind: a.kind,
+        url: null,
+      })),
+    };
+  } catch {
+    return {
+      ...row,
+      sender: 'Unreadable message',
+      subject: 'This message could not be decrypted',
+      preview: 'It may be damaged, or it may belong to a different mailbox key.',
+      body: '<p>This message could not be decrypted.</p>',
+    };
+  }
+}
+
+function rowToEmail(input: EmailRow): Email {
+  const row = openRow(input);
   const { timestamp, date } = formatTimestamp(row.created_at);
   return {
     id: row.id,
