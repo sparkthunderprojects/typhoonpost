@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 import type { Email, FolderId, LabelId, FilterTab, Category, AppView, Contact, ContactGroup, CalendarEvent, Task, Attachment, Importance } from '@/types';
 import { contactName } from '@/types';
-import { categoryDefs, folderName, folderTree, loadPrefs, resetPrefs, usePrefs } from '@/lib/prefs';
+import { categoryDefs, folderName, folderTree, loadPrefs, resetPrefs, setIgnored, setSenderFocus, usePrefs } from '@/lib/prefs';
 import { useTheme } from '@/hooks/useTheme';
 import { useToasts } from '@/hooks/useToasts';
 import { useAuth } from '@/hooks/useAuth';
@@ -79,6 +79,8 @@ import { Logo } from '@/components/Logo';
 import { EmailList } from '@/components/EmailList';
 import { EmailReader } from '@/components/EmailReader';
 import { Composer, type ComposerState, type ComposeData } from '@/components/Composer';
+import { conversationOf, isFocused, threadKey } from '@/lib/thread';
+import { downloadText, fileNameFor, printEmail, toEml } from '@/lib/export';
 import { followUpTaskTitle, followUpTimestamp } from '@/lib/followup';
 import { buildReply, type ReplyMode } from '@/lib/reply';
 import { processMail } from '@/lib/privacy';
@@ -120,6 +122,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
   const [category, setCategory] = useState<Category>('primary');
   const [query, setQuery] = useState('');
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [readerOpen, setReaderOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [listCollapsed, setListCollapsed] = useState(false);
 
@@ -245,19 +248,27 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
     }
     if (activeFolder === 'inbox' && !activeLabel) {
       // Focused = primary; Other = promotions + social
-      list = list.filter((e) => (category === 'primary' ? e.category === 'primary' : e.category !== 'primary'));
+      list = list.filter((e) => isFocused(e, prefs.senderFocus) === (category === 'primary'));
     }
     if (filter === 'unread') list = list.filter((e) => !e.read);
     if (filter === 'starred') list = list.filter((e) => e.starred);
     list = filterBy(list, query, emailMatches);
     if (list.some((e) => e.pinned)) list = [...list.filter((e) => e.pinned), ...list.filter((e) => !e.pinned)];
     return list;
-  }, [emails, activeFolder, activeLabel, category, filter, query]);
+  }, [emails, activeFolder, activeLabel, category, filter, query, prefs.senderFocus]);
 
   const activeEmail = useMemo(
     () => emails.find((e) => e.id === activeId) ?? null,
     [emails, activeId],
   );
+
+  // With the reading pane off, going to another folder or switching the pane off returns to the list.
+  useEffect(() => setReaderOpen(false), [activeFolder, activeLabel, prefs.readingPane]);
+
+  const conversation = useMemo(() => (activeEmail ? conversationOf(activeEmail, emails) : []), [activeEmail, emails]);
+  const activeKey = activeEmail ? threadKey(activeEmail) : '';
+  const activeIgnored = Boolean(activeKey) && prefs.ignored.includes(activeKey);
+  const activeFocus = activeEmail ? prefs.senderFocus[activeEmail.senderEmail.toLowerCase()] ?? null : null;
 
   // ---- Mail counts ----
   const counts = useMemo(() => {
@@ -316,6 +327,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
   // ---- Mail actions ----
   const openEmail = useCallback((id: string) => {
     setActiveId(id);
+    setReaderOpen(true);
     setEmails((prev) => prev.map((e) => (e.id === id && !e.read ? { ...e, read: true } : e)));
     dbUpdateEmail(id, { read: true }).catch(() => {});
   }, []);
@@ -468,6 +480,59 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
     },
     [emails],
   );
+
+  /** Quiet move to Deleted Items, used for ignored conversations. Returns what it moved. */
+  const trashQuietly = useCallback(
+    (ids: string[]): Email[] => {
+      const picked = emails.filter((e) => ids.includes(e.id) && e.folder !== 'trash');
+      if (!picked.length) return [];
+      const set = new Set(picked.map((e) => e.id));
+      setEmails((prev) => prev.map((e) => (set.has(e.id) ? { ...e, folder: 'trash', snoozedUntil: undefined } : e)));
+      updateEmailsBulk([...set], { folder: 'trash' }).catch(() => {});
+      if (activeId && set.has(activeId)) setActiveId(null);
+      return picked;
+    },
+    [emails, activeId],
+  );
+
+  /** Ignoring sends the whole conversation, now and later, to Deleted Items. */
+  const toggleIgnore = useCallback(
+    (email: Email) => {
+      const key = threadKey(email);
+      if (!key) {
+        push('Messages without a subject cannot be ignored as a conversation');
+        return;
+      }
+      if (prefs.ignored.includes(key)) {
+        setIgnored(key, false);
+        push('Conversation is no longer ignored');
+        return;
+      }
+      setIgnored(key, true);
+      const moved = trashQuietly(emails.filter((e) => threadKey(e) === key && e.folder === 'inbox').map((e) => e.id));
+      push('Conversation ignored. It and any new replies go to Deleted Items', 'Undo', () => {
+        setIgnored(key, false);
+        setEmails((prev) => prev.map((e) => moved.find((m) => m.id === e.id) ?? e));
+        for (const m of moved) dbUpdateEmail(m.id, { folder: m.folder }).catch(() => {});
+      });
+    },
+    [prefs.ignored, emails, trashQuietly, push],
+  );
+
+  // Mail that arrives later in an ignored conversation goes straight to Deleted Items.
+  useEffect(() => {
+    if (!prefs.ignored.length) return;
+    const ids = emails.filter((e) => e.folder === 'inbox' && prefs.ignored.includes(threadKey(e))).map((e) => e.id);
+    if (ids.length) trashQuietly(ids);
+  }, [emails, prefs.ignored, trashQuietly]);
+
+  const cleanForOutput = useCallback((html: string) => processMail(html, { allowImages: false }).html, []);
+  const printActive = useCallback(() => activeEmail && printEmail(activeEmail, cleanForOutput), [activeEmail, cleanForOutput]);
+  const saveActive = useCallback(() => {
+    if (!activeEmail) return;
+    downloadText(fileNameFor(activeEmail, 'eml'), toEml(activeEmail, cleanForOutput), 'message/rfc822');
+    push('Saved the message as a file. Attachments are not included');
+  }, [activeEmail, cleanForOutput, push]);
 
   const togglePin = useCallback((id: string) => {
     setEmails((prev) =>
@@ -1158,11 +1223,26 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
             onSnooze={(opt) => activeId && snoozeEmail(activeId, opt)}
             onFollowUp={(day) => activeId && setFollowUp(activeId, day)}
             onToggleLabel={(label) => activeId && toggleLabel(activeId, label)}
+            more={{
+              ignored: activeIgnored,
+              focus: activeFocus,
+              inFocused: activeEmail ? isFocused(activeEmail, prefs.senderFocus) : true,
+              onPrint: printActive,
+              onSaveAs: saveActive,
+              onIgnore: () => activeEmail && toggleIgnore(activeEmail),
+              onSenderFocus: (choice) => {
+                if (!activeEmail) return;
+                setSenderFocus(activeEmail.senderEmail, choice);
+                push(choice ? `${activeEmail.sender} will always go to ${choice === 'focused' ? 'Focused' : 'Other'}` : 'Back to automatic sorting');
+              },
+            }}
           />
         )}
         <div className="flex min-h-0 min-w-0 flex-1">
       {view === 'mail' ? (
-        <>
+        <div className={`flex min-h-0 min-w-0 flex-1 ${prefs.readingPane === 'bottom' ? 'flex-col' : ''}`}>
+          {(prefs.readingPane !== 'off' || !readerOpen || !activeEmail) && (
+          <div className={prefs.readingPane === 'bottom' ? 'flex h-[42%] min-h-[170px] shrink-0 border-b border-line' : 'flex min-w-0 flex-1'}>
           <EmailList
             emails={visibleEmails}
             activeId={activeId}
@@ -1189,16 +1269,24 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
             onToggleCollapse={() => setListCollapsed((v) => !v)}
             allSelected={allSelected}
           />
+          </div>
+          )}
 
+          {(prefs.readingPane !== 'off' || (readerOpen && activeEmail)) && (
           <EmailReader
             email={activeEmail}
+            layout={prefs.readingPane === 'right' ? 'side' : 'full'}
+            onBack={prefs.readingPane === 'off' ? () => setReaderOpen(false) : undefined}
+            thread={conversation}
+            onOpenMessage={openEmail}
             onReply={() => activeEmail && openComposerReply(activeEmail)}
             contacts={contacts}
             onAddToContacts={addSenderToContacts}
             onDownloadAttachment={downloadFile}
             onEditDraft={openDraft}
           />
-        </>
+          )}
+        </div>
       ) : view === 'docs' ? (
         <Suspense fallback={<div className="flex flex-1 items-center justify-center text-sm text-fg-muted">Opening Docs…</div>}>
           <DocsView userId={userId} query={docQuery} />

@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { Reply, Paperclip, Clock, MailOpen, Flag } from 'lucide-react';
+import { Reply, Paperclip, Clock, MailOpen, Flag, ArrowLeft } from 'lucide-react';
 import type { Email, Contact, Attachment } from '@/types';
 import { categoryDef, usePrefs } from '@/lib/prefs';
 import { Avatar } from '@/components/Avatar';
@@ -14,6 +14,12 @@ interface EmailReaderProps {
   onAddToContacts: (email: Email) => void;
   onDownloadAttachment: (att: Attachment) => void;
   onEditDraft: (email: Email) => void;
+  /** 'side' sits beside the list; 'full' fills the space under or instead of it. */
+  layout?: 'side' | 'full';
+  onBack?: () => void;
+  /** Every message in this conversation, oldest first (includes this one). */
+  thread?: Email[];
+  onOpenMessage?: (id: string) => void;
 }
 
 export function EmailReader({
@@ -23,10 +29,24 @@ export function EmailReader({
   onAddToContacts,
   onDownloadAttachment,
   onEditDraft,
+  layout = 'side',
+  onBack,
+  thread = [],
+  onOpenMessage,
 }: EmailReaderProps) {
   const prefs = usePrefs();
   return (
-    <section className="flex h-full w-[42%] min-w-[380px] max-w-[640px] flex-1 flex-col bg-bg-subtle">
+    <section
+      className={`flex h-full flex-1 flex-col bg-bg-subtle ${layout === 'side' ? 'w-[42%] min-w-[380px] max-w-[640px]' : 'w-full min-w-0'}`}
+    >
+      {onBack && (
+        <button
+          onClick={onBack}
+          className="flex shrink-0 items-center gap-1.5 border-b border-line px-4 py-2 text-left text-sm text-accent hover:bg-bg-muted"
+        >
+          <ArrowLeft className="h-4 w-4" /> Back to list
+        </button>
+      )}
       <AnimatePresence mode="wait">
         {email ? (
           <motion.div
@@ -113,6 +133,28 @@ export function EmailReader({
                     </div>
                   </div>
                 </div>
+
+                {thread.length > 1 && (
+                  <div className="mt-4 rounded-lg border border-line bg-bg" data-testid="conversation">
+                    <p className="border-b border-line px-3 py-1.5 text-2xs font-semibold text-fg-muted">
+                      Conversation · {thread.length} messages
+                    </p>
+                    {thread.map((m) => (
+                      <button
+                        key={m.id}
+                        onClick={() => onOpenMessage?.(m.id)}
+                        aria-current={m.id === email.id}
+                        className={`flex w-full items-center gap-2 border-b border-line px-3 py-1.5 text-left text-xs last:border-b-0 hover:bg-bg-muted ${
+                          m.id === email.id ? 'bg-accent-soft/50 font-medium text-fg' : 'text-fg-muted'
+                        }`}
+                      >
+                        <span className="w-28 shrink-0 truncate">{m.folder === 'sent' ? 'You' : m.sender}</span>
+                        <span className="min-w-0 flex-1 truncate text-fg-subtle">{m.preview}</span>
+                        <span className="shrink-0 text-2xs text-fg-subtle">{m.date}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
 
                 <MessageBody html={email.body} senderEmail={email.senderEmail} />
 

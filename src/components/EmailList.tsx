@@ -4,6 +4,8 @@ import type { Email, FilterTab, Category } from '@/types';
 import { EmailListItem } from '@/components/EmailListItem';
 import { Logo } from '@/components/Logo';
 import { startMailDrag } from '@/lib/dnd';
+import { usePrefs } from '@/lib/prefs';
+import { groupThreads } from '@/lib/thread';
 
 interface EmailListProps {
   emails: Email[];
@@ -71,6 +73,8 @@ export function EmailList({
   allSelected,
 }: EmailListProps) {
   const [filterOpen, setFilterOpen] = useState(false);
+  const [openThreads, setOpenThreads] = useState<Set<string>>(new Set());
+  const prefs = usePrefs();
 
   if (collapsed) {
     return (
@@ -181,30 +185,65 @@ export function EmailList({
         {emails.length === 0 ? (
           <EmptyState folderName={folderName} filtered={filter !== 'all'} />
         ) : (
-          groupByDate(emails).map((group) => (
-            <div key={group.label}>
-              <div className="sticky top-0 z-10 border-b border-line bg-bg-subtle/95 px-4 py-1.5 text-xs font-semibold text-fg-muted backdrop-blur">
-                {group.label}
+          (() => {
+            // Conversations: one row per subject, newest first, with the rest folded underneath.
+            const threads = prefs.conversations ? groupThreads(emails) : emails.map((e) => groupThreads([e])[0]);
+            const byHead = new Map(threads.map((t) => [t.head.id, t]));
+            const row = (email: Email, extra: { threadCount?: number; threadOpen?: boolean; onToggleThread?: () => void; child?: boolean } = {}) => (
+              <EmailListItem
+                key={email.id}
+                email={email}
+                active={email.id === activeId}
+                selected={selectedIds.has(email.id)}
+                onOpen={() => onOpen(email.id)}
+                onToggleSelect={() => onToggleSelect(email.id)}
+                onToggleStar={() => onToggleStar(email.id)}
+                onQuickArchive={() => onQuickArchive(email.id)}
+                onQuickDelete={() => onQuickDelete(email.id)}
+                onQuickMarkUnread={() => onQuickMarkUnread(email.id)}
+                onQuickSnooze={(e) => onQuickSnooze(e, email.id)}
+                onTogglePin={() => onTogglePin(email.id)}
+                onDragStart={(e) =>
+                  startMailDrag(
+                    e,
+                    selectedIds.has(email.id)
+                      ? [...selectedIds]
+                      : // A folded conversation moves as one.
+                        extra.threadCount && extra.threadCount > 1 && !extra.threadOpen
+                        ? (byHead.get(email.id)?.items.map((m) => m.id) ?? [email.id])
+                        : [email.id],
+                  )
+                }
+                {...extra}
+              />
+            );
+            return groupByDate(threads.map((t) => t.head)).map((group) => (
+              <div key={group.label}>
+                <div className="sticky top-0 z-10 border-b border-line bg-bg-subtle/95 px-4 py-1.5 text-xs font-semibold text-fg-muted backdrop-blur">
+                  {group.label}
+                </div>
+                {group.items.flatMap((head) => {
+                  const t = byHead.get(head.id)!;
+                  const open = t.key !== '' && openThreads.has(t.key);
+                  const rows = [
+                    row(head, {
+                      threadCount: t.items.length,
+                      threadOpen: open,
+                      onToggleThread: () =>
+                        setOpenThreads((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(t.key)) next.delete(t.key);
+                          else next.add(t.key);
+                          return next;
+                        }),
+                    }),
+                  ];
+                  if (open) rows.push(...t.items.slice(1).map((e) => row(e, { child: true })));
+                  return rows;
+                })}
               </div>
-              {group.items.map((email) => (
-                <EmailListItem
-                  key={email.id}
-                  email={email}
-                  active={email.id === activeId}
-                  selected={selectedIds.has(email.id)}
-                  onOpen={() => onOpen(email.id)}
-                  onToggleSelect={() => onToggleSelect(email.id)}
-                  onToggleStar={() => onToggleStar(email.id)}
-                  onQuickArchive={() => onQuickArchive(email.id)}
-                  onQuickDelete={() => onQuickDelete(email.id)}
-                  onQuickMarkUnread={() => onQuickMarkUnread(email.id)}
-                  onQuickSnooze={(e) => onQuickSnooze(e, email.id)}
-                  onTogglePin={() => onTogglePin(email.id)}
-                  onDragStart={(e) => startMailDrag(e, selectedIds.has(email.id) ? [...selectedIds] : [email.id])}
-                />
-              ))}
-            </div>
-          ))
+            ));
+          })()
         )}
       </div>
     </section>

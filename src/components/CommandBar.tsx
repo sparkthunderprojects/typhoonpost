@@ -21,6 +21,7 @@ import { FOLDER_NAMES } from '@/types';
 import { folderTree, usePrefs } from '@/lib/prefs';
 import { SnoozeMenu, type SnoozeOption } from '@/components/SnoozeMenu';
 import { FollowUpMenu } from '@/components/FollowUpMenu';
+import { MoreMenu, ViewMenu, type MoreMenuProps } from '@/components/MailMenus';
 import { LabelPicker } from '@/components/LabelPicker';
 
 interface CommandBarProps {
@@ -37,6 +38,7 @@ interface CommandBarProps {
   onToggleFlag: () => void;
   onSnooze: (opt: SnoozeOption) => void;
   onFollowUp: (day: string | null) => void;
+  more: Omit<MoreMenuProps, 'hasEmail'>;
   onToggleLabel: (label: LabelId) => void;
 }
 
@@ -103,6 +105,7 @@ export function CommandBar({
   onSnooze,
   onFollowUp,
   onToggleLabel,
+  more,
 }: CommandBarProps) {
   const prefs = usePrefs();
   const [moveOpen, setMoveOpen] = useState(false);
@@ -193,6 +196,8 @@ export function CommandBar({
           onToggle={onToggleLabel}
         />
       </Menu>
+      <MoreMenu hasEmail={hasEmail} {...more} />
+      <ViewMenu />
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { Flag, Paperclip, Reply, Archive, Trash2, Mail, Clock, Pin, ArrowDown } from 'lucide-react';
+import { Flag, Paperclip, Reply, Archive, Trash2, Mail, Clock, Pin, ArrowDown, ChevronRight, ChevronDown } from 'lucide-react';
 import type { Email } from '@/types';
 import { categoryDef, usePrefs } from '@/lib/prefs';
 import { Avatar } from '@/components/Avatar';
@@ -17,6 +17,12 @@ interface EmailListItemProps {
   onQuickSnooze: (e: React.MouseEvent) => void;
   onTogglePin: () => void;
   onDragStart: (e: React.DragEvent) => void;
+  /** Messages in this conversation, when it has more than one. */
+  threadCount?: number;
+  threadOpen?: boolean;
+  onToggleThread?: () => void;
+  /** A later message shown under its conversation. */
+  child?: boolean;
 }
 
 export function EmailListItem({
@@ -32,14 +38,19 @@ export function EmailListItem({
   onQuickSnooze,
   onTogglePin,
   onDragStart,
+  threadCount = 1,
+  threadOpen = false,
+  onToggleThread,
+  child = false,
 }: EmailListItemProps) {
   const prefs = usePrefs();
+  const compact = prefs.density === 'compact';
   return (
     <div
       draggable
       onDragStart={onDragStart}
       onClick={onOpen}
-      className={`group relative flex cursor-pointer gap-3 border-b border-line px-4 py-3 transition-colors ${
+      className={`group relative flex cursor-pointer gap-3 border-b border-line transition-colors ${compact ? 'px-4 py-1.5' : 'px-4 py-3'} ${child ? 'pl-10' : ''} ${
         active ? 'bg-accent-soft/60' : 'hover:bg-bg-muted/60'
       }`}
     >
@@ -62,7 +73,7 @@ export function EmailListItem({
         />
       </div>
 
-      <Avatar initials={email.initials} color={email.avatarColor} size="md" />
+      {!compact && <Avatar initials={email.initials} color={email.avatarColor} size="md" />}
 
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
@@ -81,6 +92,20 @@ export function EmailListItem({
           {email.importance === 'low' && <ArrowDown className="h-3 w-3 shrink-0 text-fg-subtle" aria-label="Low importance" />}
           {email.followUpAt && (
             <Flag className="h-3 w-3 shrink-0 fill-current text-warning" aria-label="Follow up" />
+          )}
+          {threadCount > 1 && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleThread?.();
+              }}
+              aria-label={threadOpen ? 'Collapse conversation' : `Show ${threadCount} messages in this conversation`}
+              aria-expanded={threadOpen}
+              className="flex shrink-0 items-center gap-0.5 rounded-full bg-bg-muted px-1.5 py-0.5 text-2xs font-medium text-fg-muted hover:text-fg"
+            >
+              {threadOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              {threadCount}
+            </button>
           )}
           {email.pinned && <Pin className="h-3 w-3 shrink-0 fill-current text-accent" aria-label="Pinned" />}
           {email.snoozedUntil && (
@@ -111,7 +136,7 @@ export function EmailListItem({
           </span>
         </div>
 
-        <p className="mt-1 truncate text-xs text-fg-subtle">{email.preview}</p>
+        {!compact && <p className="mt-1 truncate text-xs text-fg-subtle">{email.preview}</p>}
 
         {email.labels.length > 0 && (
           <div className="mt-1.5 flex items-center gap-1">

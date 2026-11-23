@@ -18,9 +18,30 @@ export interface Prefs {
   folders: MailFolder[];
   categories: MailCategory[];
   favourites: string[];
+  readingPane: ReadingPane;
+  density: Density;
+  /** Group messages with the same subject into one conversation in the list. */
+  conversations: boolean;
+  /** Conversation keys (normalised subjects) whose messages go straight to Deleted Items. */
+  ignored: string[];
+  /** Senders you moved to Focused or Other by hand. */
+  senderFocus: Record<string, 'focused' | 'other'>;
 }
 
-export const DEFAULT_PREFS: Prefs = { v: 1, folders: [], categories: [], favourites: ['inbox', 'sent', 'drafts'] };
+export type ReadingPane = 'right' | 'bottom' | 'off';
+export type Density = 'comfortable' | 'compact';
+
+export const DEFAULT_PREFS: Prefs = {
+  v: 1,
+  folders: [],
+  categories: [],
+  favourites: ['inbox', 'sent', 'drafts'],
+  readingPane: 'right',
+  density: 'comfortable',
+  conversations: true,
+  ignored: [],
+  senderFocus: {},
+};
 
 let state: Prefs = DEFAULT_PREFS;
 let revision = 0; // 0 = nothing stored yet
@@ -176,3 +197,28 @@ export function addCategory(name: string, color: string): string {
 export const editCategory = (id: string, name: string, color: string) =>
   updatePrefs((p) => ({ ...p, categories: p.categories.map((c) => (`c:${c.id}` === id ? { ...c, name: name.trim() || c.name, color } : c)) }));
 export const removeCategory = (id: string) => updatePrefs((p) => ({ ...p, categories: p.categories.filter((c) => `c:${c.id}` !== id) }));
+
+// ---- View settings, ignored conversations and Focused/Other choices ----
+export const setReadingPane = (readingPane: ReadingPane) => updatePrefs((p) => ({ ...p, readingPane }));
+export const setDensity = (density: Density) => updatePrefs((p) => ({ ...p, density }));
+export const setConversations = (conversations: boolean) => updatePrefs((p) => ({ ...p, conversations }));
+
+export function setIgnored(key: string, ignored: boolean) {
+  if (!key) return;
+  updatePrefs((p) => ({
+    ...p,
+    ignored: ignored ? (p.ignored.includes(key) ? p.ignored : [...p.ignored, key]) : p.ignored.filter((k) => k !== key),
+  }));
+}
+
+/** Pass null to go back to automatic sorting for this sender. */
+export function setSenderFocus(address: string, choice: 'focused' | 'other' | null) {
+  const a = address.trim().toLowerCase();
+  if (!a) return;
+  updatePrefs((p) => {
+    const next = { ...p.senderFocus };
+    if (choice) next[a] = choice;
+    else delete next[a];
+    return { ...p, senderFocus: next };
+  });
+}
