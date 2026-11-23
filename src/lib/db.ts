@@ -1,3 +1,4 @@
+import { previewOf } from '@/lib/preview';
 import { supabase } from '@/lib/supabase';
 import { decryptMessage, encryptMessage, type PayloadAttachment } from '@/lib/crypto/envelope';
 import { decryptFile, decryptRecord, encryptFile, encryptRecord, type EncryptedRecord } from '@/lib/crypto/record';
@@ -32,6 +33,9 @@ interface EmailRow {
   follow_up_at?: string | null;
   created_at: string;
   to_addresses?: string[] | null;
+  cc_addresses?: string[];
+  bcc_addresses?: string[];
+  importance?: 'high' | 'low';
   attachments?: AttachmentRow[];
   enc_version?: number | null;
   enc_payload?: string | null;
@@ -121,6 +125,9 @@ function openRow(row: EmailRow): EmailRow {
       body: m.body,
       category: m.category,
       to_addresses: m.to,
+      cc_addresses: m.cc ?? [],
+      bcc_addresses: m.bcc ?? [],
+      importance: m.importance,
       attachments: m.attachments.map((a, i) => ({
         id: `${row.id}:${i}`,
         name: a.name,
@@ -176,6 +183,9 @@ function rowToEmail(input: EmailRow): Email {
     followUpAt: row.follow_up_at ?? undefined,
     createdAt: row.created_at,
     toAddresses: row.to_addresses ?? [],
+    ccAddresses: row.cc_addresses ?? [],
+    bccAddresses: row.bcc_addresses ?? [],
+    importance: row.importance ?? 'normal',
   };
 }
 
@@ -288,7 +298,9 @@ function encryptedEmailRow(userId: string, email: NewEmail, recipientPublicKey: 
       body: email.body,
       category: email.category as 'primary' | 'promotions',
       to: email.toAddresses ?? [],
-      cc: [],
+      cc: email.ccAddresses ?? [],
+      ...(email.bccAddresses?.length ? { bcc: email.bccAddresses } : {}),
+      ...(email.importance && email.importance !== 'normal' ? { importance: email.importance } : {}),
       attachments: email.payloadAttachments ?? [],
     },
     recipientPublicKey,
@@ -642,9 +654,16 @@ export async function claimAddress(handle: string): Promise<string> {
 
 export interface DraftInput {
   to: string;
+  cc?: string;
+  bcc?: string;
+  importance?: 'high' | 'normal' | 'low';
   subject: string;
   body: string;
   payloadAttachments?: PayloadAttachment[];
+}
+
+function splitAddrs(s?: string): string[] {
+  return (s ?? '').split(/[,;]/).map((x) => x.trim().toLowerCase()).filter(Boolean);
 }
 
 export async function saveDraft(userId: string, existingId: string | null, d: DraftInput): Promise<Email> {
@@ -656,7 +675,7 @@ export async function saveDraft(userId: string, existingId: string | null, d: Dr
       senderEmail: '',
       avatarColor: '#94a3b8',
       subject: d.subject,
-      preview: d.body.replace(/<[^>]+>/g, '').slice(0, 120) || '(no content)',
+      preview: previewOf(d.body),
       body: d.body,
       read: true,
       starred: false,
@@ -664,6 +683,9 @@ export async function saveDraft(userId: string, existingId: string | null, d: Dr
       labels: [],
       category: 'primary',
       toAddresses: recipients,
+      ccAddresses: splitAddrs(d.cc),
+      bccAddresses: splitAddrs(d.bcc),
+      importance: d.importance,
       payloadAttachments: d.payloadAttachments,
     },
     ownPublicKey(),

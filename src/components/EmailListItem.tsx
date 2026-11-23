@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { Flag, Paperclip, Reply, Archive, Trash2, Mail, Clock, Pin } from 'lucide-react';
+import { Flag, Paperclip, Reply, Archive, Trash2, Mail, Clock, Pin, ArrowDown } from 'lucide-react';
 import type { Email } from '@/types';
 import { categoryDef, usePrefs } from '@/lib/prefs';
 import { Avatar } from '@/components/Avatar';
@@ -75,6 +75,13 @@ export function EmailListItem({
               ? `To: ${email.toAddresses.join(', ')}`
               : email.sender}
           </span>
+          {email.importance === 'high' && (
+            <span className="shrink-0 text-sm font-bold leading-none text-danger" title="High importance" aria-label="High importance">!</span>
+          )}
+          {email.importance === 'low' && <ArrowDown className="h-3 w-3 shrink-0 text-fg-subtle" aria-label="Low importance" />}
+          {email.followUpAt && (
+            <Flag className="h-3 w-3 shrink-0 fill-current text-warning" aria-label="Follow up" />
+          )}
           {email.pinned && <Pin className="h-3 w-3 shrink-0 fill-current text-accent" aria-label="Pinned" />}
           {email.snoozedUntil && (
             <span className="flex shrink-0 items-center gap-1 rounded-full bg-warning/10 px-1.5 py-0.5 text-2xs font-medium text-warning">

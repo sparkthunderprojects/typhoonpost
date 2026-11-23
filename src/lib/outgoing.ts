@@ -1,6 +1,10 @@
 import { supabase } from '@/lib/supabase';
 import { encryptMessage, type PayloadAttachment } from '@/lib/crypto/envelope';
 import type { Email } from '@/types';
+import { previewOf } from '@/lib/preview';
+import { parseRecipients, splitRecipients } from '@/lib/recipients';
+
+export { parseRecipients, splitRecipients };
 import { deliverLocal, insertEmail, lookupPublicKeys, sendViaResend, type LocalDelivery } from '@/lib/db';
 
 const COLORS = ['#0F6CBD', '#0EA5E9', '#14B8A6', '#16A34A', '#F59E0B', '#EC4899', '#8B5CF6', '#DC2626'];
@@ -8,17 +12,6 @@ function colorFor(seed: string): string {
   let h = 0;
   for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
   return COLORS[h % COLORS.length];
-}
-
-/** "Ada <ada@x.org>, bob@y.com" → ["ada@x.org", "bob@y.com"], lower-cased and de-duplicated. */
-export function parseRecipients(to: string): string[] {
-  const out = new Set<string>();
-  for (const part of to.split(/[,;]/)) {
-    const m = part.match(/<([^>]+)>/);
-    const addr = (m ? m[1] : part).trim().toLowerCase();
-    if (addr) out.add(addr);
-  }
-  return [...out];
 }
 
 const REASONS: Record<string, string> = {
@@ -36,10 +29,13 @@ export interface SendOutcome {
   failed: { address: string; reason: string }[];
 }
 
-interface SendArgs {
+export interface SendArgs {
   userId: string;
   myAddress: string;
   to: string;
+  cc?: string;
+  bcc?: string;
+  importance?: 'high' | 'normal' | 'low';
   subject: string;
   body: string;
   attachments?: PayloadAttachment[];
@@ -50,9 +46,9 @@ interface SendArgs {
  * browser encrypts to their own key (it never passes through an outside mail provider). Everyone
  * else goes through the mail provider, which has to see the message to send it.
  */
-export async function sendMessage({ userId, myAddress, to, subject, body, attachments = [] }: SendArgs): Promise<SendOutcome> {
-  const recipients = parseRecipients(to);
-  const preview = body.replace(/<[^>]+>/g, '').slice(0, 120) || '(no content)';
+export async function sendMessage({ userId, myAddress, to, cc = '', bcc = '', importance = 'normal', subject, body, attachments = [] }: SendArgs): Promise<SendOutcome> {
+  const { toList, ccList, bccList, all: recipients } = splitRecipients(to, cc, bcc);
+  const preview = previewOf(body);
 
   // Saved first so it survives even if delivery fails.
   const saved = await insertEmail(userId, {
@@ -67,7 +63,10 @@ export async function sendMessage({ userId, myAddress, to, subject, body, attach
     folder: 'sent',
     labels: [],
     category: 'primary',
-    toAddresses: recipients,
+    toAddresses: toList,
+    ccAddresses: ccList,
+    bccAddresses: bccList,
+    importance,
     payloadAttachments: attachments,
   });
 
@@ -111,8 +110,10 @@ export async function sendMessage({ userId, myAddress, to, subject, body, attach
           preview,
           body,
           category: 'primary',
-          to: recipients,
-          cc: [],
+          // Everyone sees To and Cc. Bcc is left out of every recipient's copy on purpose.
+          to: toList,
+          cc: ccList,
+          ...(importance !== 'normal' ? { importance } : {}),
           attachments,
         },
         keys.get(address)!,
@@ -138,12 +139,29 @@ export async function sendMessage({ userId, myAddress, to, subject, body, attach
   }
 
   if (external.length) {
-    try {
-      await sendViaResend({ to: external.join(', '), subject, html: body });
-      delivered.push(...external);
-    } catch (e) {
-      const reason = e instanceof Error ? e.message : 'delivery failed';
-      for (const address of external) failed.push({ address, reason });
+    // One shared message for To and Cc, and a separate message for each Bcc address so nobody
+    // outside can see who else received it.
+    const extTo = external.filter((a) => toList.includes(a));
+    const extCc = external.filter((a) => ccList.includes(a));
+    const extBcc = external.filter((a) => bccList.includes(a));
+    const jobs: { addresses: string[]; payload: { to: string; cc?: string } }[] = [];
+    if (extTo.length || extCc.length) {
+      // The mail provider needs at least one To address. With only Cc outside, they go in To.
+      const toPart = extTo.length ? extTo : extCc;
+      jobs.push({
+        addresses: [...extTo, ...extCc],
+        payload: { to: toPart.join(', '), ...(extTo.length && extCc.length ? { cc: extCc.join(', ') } : {}) },
+      });
+    }
+    for (const address of extBcc) jobs.push({ addresses: [address], payload: { to: address } });
+    for (const job of jobs) {
+      try {
+        await sendViaResend({ ...job.payload, subject, html: body });
+        delivered.push(...job.addresses);
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : 'delivery failed';
+        for (const address of job.addresses) failed.push({ address, reason });
+      }
     }
   }
 

@@ -34,6 +34,9 @@ export interface MessagePayload {
   category: 'primary' | 'promotions';
   to: string[];
   cc: string[];
+  /** Only ever present on the sender's own copy (Sent Items, drafts). Never in a recipient's copy. */
+  bcc?: string[];
+  importance?: 'high' | 'low';
   attachments: PayloadAttachment[];
 }
 

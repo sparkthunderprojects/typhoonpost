@@ -23,7 +23,7 @@ import {
   Tag,
   CheckSquare,
 } from 'lucide-react';
-import type { Email, FolderId, LabelId, FilterTab, Category, AppView, Contact, ContactGroup, CalendarEvent, Task, Attachment } from '@/types';
+import type { Email, FolderId, LabelId, FilterTab, Category, AppView, Contact, ContactGroup, CalendarEvent, Task, Attachment, Importance } from '@/types';
 import { contactName } from '@/types';
 import { categoryDefs, folderName, folderTree, loadPrefs, resetPrefs, usePrefs } from '@/lib/prefs';
 import { useTheme } from '@/hooks/useTheme';
@@ -78,7 +78,11 @@ import { CommandPalette, type PaletteCommand } from '@/components/CommandPalette
 import { Logo } from '@/components/Logo';
 import { EmailList } from '@/components/EmailList';
 import { EmailReader } from '@/components/EmailReader';
-import { Composer, type ComposerState } from '@/components/Composer';
+import { Composer, type ComposerState, type ComposeData } from '@/components/Composer';
+import { followUpTaskTitle, followUpTimestamp } from '@/lib/followup';
+import { buildReply, type ReplyMode } from '@/lib/reply';
+import { processMail } from '@/lib/privacy';
+import type { Recipient } from '@/components/RecipientField';
 import { ShortcutGuide } from '@/components/ShortcutGuide';
 import { SettingsModal } from '@/components/SettingsModal';
 import { MfaScreen } from '@/components/MfaScreen';
@@ -86,7 +90,6 @@ import { ToastContainer } from '@/components/ToastContainer';
 import { ContactsView } from '@/components/ContactsView';
 import { ContactDetail } from '@/components/ContactDetail';
 import { ContactForm } from '@/components/ContactForm';
-import type { Recipient } from '@/components/RecipientField';
 import type { SnoozeOption } from '@/components/SnoozeMenu';
 
 const SNOOZE_LABELS: Record<SnoozeOption, string> = {
@@ -151,6 +154,9 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
   const [composerState, setComposerState] = useState<ComposerState>('closed');
   const [composerPrefillTo, setComposerPrefillTo] = useState<Recipient[] | undefined>(undefined);
   const [composerPrefillSubject, setComposerPrefillSubject] = useState<string | undefined>(undefined);
+  const [composerPrefillCc, setComposerPrefillCc] = useState<Recipient[] | undefined>(undefined);
+  const [composerPrefillBcc, setComposerPrefillBcc] = useState<Recipient[] | undefined>(undefined);
+  const [composerPrefillImportance, setComposerPrefillImportance] = useState<Importance | undefined>(undefined);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [signature, setSignatureState] = useState('');
@@ -692,28 +698,76 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
   );
 
   // ---- Composer ----
-  const openComposer = useCallback(() => {
-    setComposerPrefillTo(undefined);
-    setComposerPrefillSubject(undefined);
-    setComposerState('open');
-  }, []);
+  // ---- Drafts: saved encrypted as you type, one row per draft ----
+  const draftIdRef = useRef<string | null>(null);
+  const draftQueue = useRef<Promise<void>>(Promise.resolve());
+  const [composerSession, setComposerSession] = useState(0);
+  const [composerPrefillBody, setComposerPrefillBody] = useState<string | undefined>(undefined);
+  const [composerPrefillAttachments, setComposerPrefillAttachments] = useState<PayloadAttachment[] | undefined>(undefined);
 
-  const openComposerForContact = useCallback((c: Contact) => {
-    setView('mail');
-    setComposerPrefillTo([{ id: c.id, name: contactName(c), email: c.email, color: c.avatarColor }]);
-    setComposerPrefillSubject(undefined);
-    setComposerState('open');
-  }, []);
-
-  const openComposerReply = useCallback(
-    (email: Email) => {
-      setComposerPrefillTo([
-        { id: email.id, name: email.sender, email: email.senderEmail, color: email.avatarColor },
-      ]);
-      setComposerPrefillSubject(`Re: ${email.subject}`);
+  /** Starts a fresh compose session with exactly these fields; anything unset starts empty. */
+  const startCompose = useCallback(
+    (f: {
+      to?: Recipient[];
+      cc?: Recipient[];
+      bcc?: Recipient[];
+      importance?: Importance;
+      subject?: string;
+      body?: string;
+      attachments?: PayloadAttachment[];
+    }) => {
+      setComposerPrefillTo(f.to);
+      setComposerPrefillCc(f.cc);
+      setComposerPrefillBcc(f.bcc);
+      setComposerPrefillImportance(f.importance);
+      setComposerPrefillSubject(f.subject);
+      setComposerPrefillBody(f.body);
+      setComposerPrefillAttachments(f.attachments);
+      setComposerSession((n) => n + 1);
       setComposerState('open');
     },
     [],
+  );
+
+  const openComposer = useCallback(() => {
+    draftIdRef.current = null;
+    startCompose({});
+  }, [startCompose]);
+
+  const openComposerForContact = useCallback(
+    (c: Contact) => {
+      setView('mail');
+      draftIdRef.current = null;
+      startCompose({ to: [{ id: c.id, name: contactName(c), email: c.email, color: c.avatarColor }] });
+    },
+    [startCompose],
+  );
+
+  const toRecipient = useCallback(
+    (address: string): Recipient => {
+      const c = contacts.find((x) => x.email.toLowerCase() === address.toLowerCase());
+      return c
+        ? { id: c.id, name: contactName(c), email: c.email, color: c.avatarColor }
+        : { id: address, name: address, email: address, color: '#94a3b8' };
+    },
+    [contacts],
+  );
+
+  const openComposerReply = useCallback(
+    (email: Email, mode: ReplyMode = 'reply') => {
+      const draft = buildReply(email, mode, myAddress ?? userEmail, (html) => processMail(html, { allowImages: false }).html);
+      draftIdRef.current = null;
+      startCompose({
+        to: draft.to.map(toRecipient),
+        cc: draft.cc.map(toRecipient),
+        subject: draft.subject,
+        body: draft.body,
+        attachments: draft.keepAttachments
+          ? email.attachments.map((a) => ({ name: a.name, size: a.size, kind: a.kind, file: a.file }))
+          : undefined,
+      });
+    },
+    [myAddress, userEmail, startCompose, toRecipient],
   );
 
   const closeComposer = useCallback(() => setComposerState('closed'), []);
@@ -724,20 +778,15 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
   );
   const restoreComposer = useCallback(() => setComposerState('open'), []);
 
-  // ---- Drafts: saved encrypted as you type, one row per draft ----
-  const draftIdRef = useRef<string | null>(null);
-  const draftQueue = useRef<Promise<void>>(Promise.resolve());
-  const [composerSession, setComposerSession] = useState(0);
-  const [composerPrefillBody, setComposerPrefillBody] = useState<string | undefined>(undefined);
-  const [composerPrefillAttachments, setComposerPrefillAttachments] = useState<PayloadAttachment[] | undefined>(undefined);
-
   const autosaveDraft = useCallback(
-    (to: string, subject: string, body: string, attachments: PayloadAttachment[]) => {
+    (d: ComposeData) => {
       // Saves run one after another so a quick second save updates the first draft instead of
       // creating another.
       draftQueue.current = draftQueue.current.then(async () => {
         try {
-          const saved = await saveDraft(userId, draftIdRef.current, { to, subject, body, payloadAttachments: attachments });
+          const saved = await saveDraft(userId, draftIdRef.current, {
+            to: d.to, cc: d.cc, bcc: d.bcc, importance: d.importance, subject: d.subject, body: d.body, payloadAttachments: d.attachments,
+          });
           draftIdRef.current = saved.id;
           setEmails((prev) => (prev.some((e) => e.id === saved.id) ? prev.map((e) => (e.id === saved.id ? saved : e)) : [saved, ...prev]));
         } catch {
@@ -759,25 +808,30 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
     });
   }, []);
 
-  const openDraft = useCallback((email: Email) => {
-    draftIdRef.current = email.id;
-    setComposerPrefillTo(
-      (email.toAddresses ?? []).map((addr) => ({ id: addr, name: addr, email: addr, color: '#94a3b8' })),
-    );
-    setComposerPrefillSubject(email.subject);
-    setComposerPrefillBody(email.body);
-    setComposerPrefillAttachments(
-      email.attachments.map((a) => ({ name: a.name, size: a.size, kind: a.kind, file: a.file })),
-    );
-    setComposerSession((n) => n + 1);
-    setComposerState('open');
-  }, []);
+  const openDraft = useCallback(
+    (email: Email) => {
+      startCompose({
+        to: (email.toAddresses ?? []).map(toRecipient),
+        cc: (email.ccAddresses ?? []).map(toRecipient),
+        bcc: (email.bccAddresses ?? []).map(toRecipient),
+        importance: email.importance,
+        subject: email.subject,
+        body: email.body,
+        attachments: email.attachments.map((a) => ({ name: a.name, size: a.size, kind: a.kind, file: a.file })),
+      });
+      draftIdRef.current = email.id;
+    },
+    [startCompose, toRecipient],
+  );
 
   const sendEmail = useCallback(
-    async (to: string, subject: string, body: string, attachments: PayloadAttachment[]) => {
+    async (d: ComposeData) => {
+      const { to, subject, body, attachments } = d;
       let outcome: Awaited<ReturnType<typeof sendMessage>>;
       try {
-        outcome = await sendMessage({ userId, myAddress: myAddress ?? userEmail, to, subject, body, attachments });
+        outcome = await sendMessage({
+          userId, myAddress: myAddress ?? userEmail, to, cc: d.cc, bcc: d.bcc, importance: d.importance, subject, body, attachments,
+        });
       } catch {
         push('Failed to save sent email');
         return;
@@ -845,6 +899,28 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
     },
     [push],
   );
+  /** Flags a message for follow-up and keeps a matching task in step with it. */
+  const setFollowUp = useCallback(
+    (id: string, day: string | null) => {
+      const email = emails.find((e) => e.id === id);
+      if (!email) return;
+      const at = day ? followUpTimestamp(day) : null;
+      setEmails((prev) => prev.map((e) => (e.id === id ? { ...e, followUpAt: at ?? undefined } : e)));
+      dbUpdateEmail(id, { followUpAt: at }).catch(() => push('Could not save the follow-up'));
+      const title = followUpTaskTitle(email.subject);
+      const existing = tasks.find((t) => t.title === title && !t.done);
+      if (!day) {
+        if (existing) updateTaskItem({ ...existing, done: true, completedAt: new Date().toISOString() });
+        push('Follow-up cleared');
+        return;
+      }
+      if (existing) updateTaskItem({ ...existing, due: day });
+      else addTask(title, { due: day, important: email.importance === 'high' });
+      push(`Follow up set for ${new Date(at!).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}, added to Tasks`);
+    },
+    [emails, tasks, push, addTask, updateTaskItem],
+  );
+
 
   const deleteTask = useCallback(
     (id: string) => {
@@ -1074,12 +1150,13 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
             onDelete={() => (selectedIds.size > 0 ? bulkDelete() : activeId && deleteEmail(activeId))}
             onArchive={() => (selectedIds.size > 0 ? bulkArchive() : activeId && archiveEmail(activeId))}
             onMove={(f) => activeId && moveEmail(activeId, f)}
-            onReply={() => activeEmail && openComposerReply(activeEmail)}
-            onReplyAll={() => activeEmail && openComposerReply(activeEmail)}
-            onForward={() => activeEmail && openComposerReply(activeEmail)}
+            onReply={() => activeEmail && openComposerReply(activeEmail, 'reply')}
+            onReplyAll={() => activeEmail && openComposerReply(activeEmail, 'replyAll')}
+            onForward={() => activeEmail && openComposerReply(activeEmail, 'forward')}
             onToggleRead={() => activeId && toggleRead(activeId)}
             onToggleFlag={() => activeId && toggleStar(activeId)}
             onSnooze={(opt) => activeId && snoozeEmail(activeId, opt)}
+            onFollowUp={(day) => activeId && setFollowUp(activeId, day)}
             onToggleLabel={(label) => activeId && toggleLabel(activeId, label)}
           />
         )}
@@ -1178,6 +1255,9 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
         onRemoveFile={removeFile}
         onError={push}
         prefillTo={composerPrefillTo}
+        prefillCc={composerPrefillCc}
+        prefillBcc={composerPrefillBcc}
+        prefillImportance={composerPrefillImportance}
         prefillSubject={composerPrefillSubject}
         prefillBody={composerPrefillBody}
         prefillAttachments={composerPrefillAttachments}

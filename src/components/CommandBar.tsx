@@ -9,6 +9,7 @@ import {
   Forward,
   MailOpen,
   Flag,
+  CalendarCheck,
   Clock,
   Tag,
   ChevronDown,
@@ -19,6 +20,7 @@ import type { Email, FolderId, LabelId } from '@/types';
 import { FOLDER_NAMES } from '@/types';
 import { folderTree, usePrefs } from '@/lib/prefs';
 import { SnoozeMenu, type SnoozeOption } from '@/components/SnoozeMenu';
+import { FollowUpMenu } from '@/components/FollowUpMenu';
 import { LabelPicker } from '@/components/LabelPicker';
 
 interface CommandBarProps {
@@ -34,6 +36,7 @@ interface CommandBarProps {
   onToggleRead: () => void;
   onToggleFlag: () => void;
   onSnooze: (opt: SnoozeOption) => void;
+  onFollowUp: (day: string | null) => void;
   onToggleLabel: (label: LabelId) => void;
 }
 
@@ -98,11 +101,13 @@ export function CommandBar({
   onToggleRead,
   onToggleFlag,
   onSnooze,
+  onFollowUp,
   onToggleLabel,
 }: CommandBarProps) {
   const prefs = usePrefs();
   const [moveOpen, setMoveOpen] = useState(false);
   const [snoozeOpen, setSnoozeOpen] = useState(false);
+  const [followOpen, setFollowOpen] = useState(false);
   const [labelOpen, setLabelOpen] = useState(false);
 
   const hasTarget = Boolean(email) || selectionCount > 0;
@@ -171,6 +176,10 @@ export function CommandBar({
         disabled={!hasEmail}
       />
       <Btn onClick={onToggleFlag} Icon={Flag} label={email?.starred ? 'Unflag' : 'Flag'} disabled={!hasEmail} active={email?.starred} />
+      <Menu>
+        <Btn onClick={() => setFollowOpen((v) => !v)} Icon={CalendarCheck} label="Follow up" disabled={!hasEmail} chevron active={Boolean(email?.followUpAt)} />
+        <FollowUpMenu open={followOpen} onClose={() => setFollowOpen(false)} onPick={onFollowUp} hasFlag={Boolean(email?.followUpAt)} />
+      </Menu>
       <Menu>
         <Btn onClick={() => setSnoozeOpen((v) => !v)} Icon={Clock} label="Snooze" disabled={!hasEmail} chevron />
         <SnoozeMenu open={snoozeOpen} onClose={() => setSnoozeOpen(false)} onSnooze={onSnooze} />

@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import { Reply, Paperclip, Clock, MailOpen } from 'lucide-react';
+import { Reply, Paperclip, Clock, MailOpen, Flag } from 'lucide-react';
 import type { Email, Contact, Attachment } from '@/types';
 import { categoryDef, usePrefs } from '@/lib/prefs';
 import { Avatar } from '@/components/Avatar';
@@ -77,7 +77,25 @@ export function EmailReader({
                         &lt;{email.senderEmail}&gt;
                       </span>
                     </div>
+                    {(email.toAddresses?.length || email.ccAddresses?.length || email.bccAddresses?.length) ? (
+                      <div className="mt-0.5 space-y-0.5 text-2xs text-fg-subtle" data-testid="reader-recipients">
+                        {email.toAddresses?.length ? <p className="truncate">To: {email.toAddresses.join(', ')}</p> : null}
+                        {email.ccAddresses?.length ? <p className="truncate">Cc: {email.ccAddresses.join(', ')}</p> : null}
+                        {email.bccAddresses?.length ? <p className="truncate">Bcc: {email.bccAddresses.join(', ')}</p> : null}
+                      </div>
+                    ) : null}
                     <div className="mt-1 flex items-center gap-3 text-2xs text-fg-subtle">
+                      {email.importance === 'high' && (
+                        <span className="rounded bg-danger/10 px-1.5 py-0.5 font-medium text-danger">High importance</span>
+                      )}
+                      {email.importance === 'low' && (
+                        <span className="rounded bg-bg-muted px-1.5 py-0.5 font-medium">Low importance</span>
+                      )}
+                      {email.followUpAt && (
+                        <span className="flex items-center gap-1 rounded bg-warning/10 px-1.5 py-0.5 font-medium text-warning">
+                          <Flag className="h-3 w-3" /> Follow up {new Date(email.followUpAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                        </span>
+                      )}
                       <span className="flex items-center gap-1">
                         <Clock className="h-3 w-3" />
                         {email.date} · {email.timestamp}

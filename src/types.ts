@@ -39,6 +39,8 @@ export interface AttachmentFile {
   bytes: number;
 }
 
+export type Importance = 'high' | 'normal' | 'low';
+
 export interface Email {
   id: string;
   sender: string;
@@ -61,6 +63,9 @@ export interface Email {
   /** ISO timestamp the message was received/sent (used for date grouping). */
   createdAt?: string;
   toAddresses?: string[];
+  ccAddresses?: string[];
+  bccAddresses?: string[];
+  importance?: Importance;
   pinned?: boolean;
   followUpAt?: string;
 }

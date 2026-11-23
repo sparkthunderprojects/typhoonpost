@@ -8,14 +8,27 @@ import {
   Send,
   ChevronDown,
   Paperclip,
+  AlertCircle,
+  ArrowDown,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import type { Contact } from '@/types';
+import type { Contact, Importance } from '@/types';
 import type { PayloadAttachment } from '@/lib/crypto/envelope';
 import { MAX_TOTAL_BYTES } from '@/lib/db';
 import { AttachmentIcon } from '@/components/AttachmentIcon';
 import { RecipientField, type Recipient } from '@/components/RecipientField';
 import { RichTextEditor } from '@/components/editor/RichTextEditor';
+
+/** Everything the composer hands back for sending or saving as a draft. */
+export interface ComposeData {
+  to: string;
+  cc: string;
+  bcc: string;
+  importance: Importance;
+  subject: string;
+  body: string;
+  attachments: PayloadAttachment[];
+}
 
 export type ComposerState = 'closed' | 'open' | 'minimized' | 'fullscreen';
 
@@ -25,13 +38,16 @@ interface ComposerProps {
   onMinimize: () => void;
   onMaximize: () => void;
   onRestore: () => void;
-  onSend: (to: string, subject: string, body: string, attachments: PayloadAttachment[]) => void;
+  onSend: (data: ComposeData) => void;
   onDiscard: () => void;
-  onAutosave: (to: string, subject: string, body: string, attachments: PayloadAttachment[]) => void;
+  onAutosave: (data: ComposeData) => void;
   onUploadFile: (file: File) => Promise<PayloadAttachment>;
   onRemoveFile: (fileId: string) => void;
   onError: (message: string) => void;
   prefillTo?: Recipient[];
+  prefillCc?: Recipient[];
+  prefillBcc?: Recipient[];
+  prefillImportance?: Importance;
   prefillSubject?: string;
   prefillBody?: string;
   prefillAttachments?: PayloadAttachment[];
@@ -39,6 +55,12 @@ interface ComposerProps {
   sessionId?: number;
   signature?: string;
   contacts: Contact[];
+}
+
+/** Text-only comparison key: the editor rewrites HTML on load, so markup differences do not count. */
+function fingerprint(to: string, cc: string, bcc: string, importance: string, subject: string, body: string, files: number): string {
+  const text = body.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+  return JSON.stringify([to, cc, bcc, importance, subject.trim(), text, files]);
 }
 
 export function Composer({
@@ -54,6 +76,9 @@ export function Composer({
   onRemoveFile,
   onError,
   prefillTo,
+  prefillCc,
+  prefillBcc,
+  prefillImportance,
   prefillSubject,
   prefillBody,
   prefillAttachments,
@@ -67,64 +92,94 @@ export function Composer({
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
   const [showCc, setShowCc] = useState(false);
+  const [importance, setImportance] = useState<Importance>('normal');
   const [attachments, setAttachments] = useState<PayloadAttachment[]>([]);
   const [uploading, setUploading] = useState(0);
   const fileInput = useRef<HTMLInputElement>(null);
   const appliedSession = useRef<number | undefined>(undefined);
   const dirtyRef = useRef(false);
+  /** What the session started with, so opening a reply and closing it again saves nothing. */
+  const baseline = useRef('');
   const editorKey = useRef(0);
 
   useEffect(() => {
     if (state === 'open' || state === 'fullscreen') {
-      if (prefillTo) setToRecipients(prefillTo);
-      if (prefillSubject) setSubject(prefillSubject);
-      // A resumed draft replaces what is in the editor, once per resume.
+      // Each new compose session (new mail, reply, forward, resumed draft) starts from its own
+      // prefill. Restoring a minimised window keeps whatever was typed.
       if (sessionId !== undefined && appliedSession.current !== sessionId) {
         appliedSession.current = sessionId;
+        setToRecipients(prefillTo ?? []);
+        setCcRecipients(prefillCc ?? []);
+        setBccRecipients(prefillBcc ?? []);
+        setShowCc(Boolean(prefillCc?.length || prefillBcc?.length));
+        setImportance(prefillImportance ?? 'normal');
+        setSubject(prefillSubject ?? '');
         setBody(prefillBody ?? '');
         setAttachments(prefillAttachments ?? []);
+        baseline.current = fingerprint(
+          (prefillTo ?? []).map((r) => r.email).join(','),
+          (prefillCc ?? []).map((r) => r.email).join(','),
+          (prefillBcc ?? []).map((r) => r.email).join(','),
+          prefillImportance ?? 'normal',
+          prefillSubject ?? '',
+          prefillBody ?? '',
+          (prefillAttachments ?? []).length,
+        );
+        // remount editor so it picks up fresh content on a new compose session
+        editorKey.current += 1;
       }
-      // remount editor so it picks up fresh content on a new compose session
-      editorKey.current += 1;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state, sessionId]);
 
-  const allEmails = [...toRecipients, ...ccRecipients, ...bccRecipients]
-    .map((r) => r.email)
-    .join(', ');
+  const join = (list: Recipient[]) => list.map((r) => r.email).join(', ');
+  const toStr = join(toRecipients);
+  const ccStr = join(ccRecipients);
+  const bccStr = join(bccRecipients);
+  const allEmails = [toStr, ccStr, bccStr].filter(Boolean).join(', ');
+  const collect = (withSignature = false): ComposeData => ({
+    to: toStr,
+    cc: ccStr,
+    bcc: bccStr,
+    importance,
+    subject,
+    body: withSignature ? body + signatureHtml : body,
+    attachments,
+  });
+  const signatureHtml = signature
+    ? `<p style="color: rgb(var(--fg-subtle)); margin-top: 1.5rem;">— ${signature}</p>`
+    : '';
 
   // autosave to drafts
   useEffect(() => {
     if (state === 'closed') return;
-    dirtyRef.current = !!(allEmails || subject || body || attachments.length);
+    dirtyRef.current =
+      fingerprint(toStr, ccStr, bccStr, importance, subject, body, attachments.length) !== baseline.current;
     if (!dirtyRef.current) return;
-    const t = setTimeout(() => onAutosave(allEmails, subject, body, attachments), 1500);
+    const t = setTimeout(() => onAutosave(collect()), 1500);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allEmails, subject, body, attachments, state]);
+  }, [toStr, ccStr, bccStr, importance, subject, body, attachments, state]);
 
   if (state === 'closed') return null;
 
   const handleSend = () => {
     if (!toRecipients.length) return;
-    const sigHtml = signature
-      ? `<p style="color: rgb(var(--fg-subtle)); margin-top: 1.5rem;">— ${signature}</p>`
-      : '';
-    const fullBody = body + sigHtml;
     if (uploading) return;
-    onSend(allEmails, subject.trim() || '(No subject)', fullBody, attachments);
+    onSend({ ...collect(true), subject: subject.trim() || '(No subject)' });
     setAttachments([]);
     setToRecipients([]);
     setCcRecipients([]);
     setBccRecipients([]);
+    setImportance('normal');
     setSubject('');
     setBody('');
+    baseline.current = fingerprint('', '', '', 'normal', '', '', 0);
     dirtyRef.current = false;
   };
 
   const handleClose = () => {
-    if (dirtyRef.current) onAutosave(allEmails, subject, body, attachments);
+    if (dirtyRef.current) onAutosave(collect());
     onClose();
   };
 
@@ -161,8 +216,10 @@ export function Composer({
     setToRecipients([]);
     setCcRecipients([]);
     setBccRecipients([]);
+    setImportance('normal');
     setSubject('');
     setBody('');
+    baseline.current = fingerprint('', '', '', 'normal', '', '', 0);
     dirtyRef.current = false;
     onDiscard();
   };
@@ -242,7 +299,7 @@ export function Composer({
           onRemove={(id) => setToRecipients((p) => p.filter((x) => x.id !== id))}
           contacts={contacts}
           placeholder="Recipients"
-          autoFocus={!prefillTo}
+          autoFocus={!prefillTo?.length}
         />
         <div className="flex items-center justify-end border-b border-line px-4 py-1">
           <button
@@ -315,6 +372,24 @@ export function Composer({
           aria-label="Attach file"
         >
           <Paperclip className="h-4 w-4" />
+        </button>
+        <button
+          onClick={() => setImportance((v) => (v === 'high' ? 'normal' : 'high'))}
+          className={`rounded-lg p-1.5 transition-colors hover:bg-bg ${importance === 'high' ? 'text-danger' : 'text-fg-subtle hover:text-fg'}`}
+          title={importance === 'high' ? 'High importance (on)' : 'Mark as high importance'}
+          aria-label="High importance"
+          aria-pressed={importance === 'high'}
+        >
+          <AlertCircle className="h-4 w-4" />
+        </button>
+        <button
+          onClick={() => setImportance((v) => (v === 'low' ? 'normal' : 'low'))}
+          className={`rounded-lg p-1.5 transition-colors hover:bg-bg ${importance === 'low' ? 'text-accent' : 'text-fg-subtle hover:text-fg'}`}
+          title={importance === 'low' ? 'Low importance (on)' : 'Mark as low importance'}
+          aria-label="Low importance"
+          aria-pressed={importance === 'low'}
+        >
+          <ArrowDown className="h-4 w-4" />
         </button>
         {uploading > 0 && <span className="text-2xs text-fg-subtle">Encrypting and uploading…</span>}
         <div className="ml-auto flex items-center gap-2">
