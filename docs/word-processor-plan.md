@@ -106,7 +106,7 @@ Readable by the server: ids, owner and member ids, roles, timestamps, size, fold
 
 | Phase | Delivers | Size |
 |-------|----------|------|
-| 0. Spikes | Pagination prototype, DOCX round-trip on 10 real files, 100-page performance, Yjs encrypted-update prototype with two browsers. Written findings. | M |
+| 0. Spikes | Layout core prototype on real documents with metric-compatible fonts, DOCX round-trip on 10 real files, 100-page performance, Yjs encrypted-update prototype with two browsers. Written findings, including the decision on a full custom renderer. | M |
 | 1. Personal documents | Everything under Core writing, the rail item, encrypted storage, versions, import and export, mail integration, tests. | XL |
 | 2. Page layout | Real pages, headers and footers, TOC, footnotes, print and PDF that match. | XL |
 | 3. Review | Comments and suggestions for one author, then reviewers. | L |
@@ -137,8 +137,46 @@ Each phase ships only when its tests pass and the spec has a "Documents phase N 
 5. **Size limit per document** and per account for stored documents and images.
 6. **AI writing help:** none (recommended, keeps the promise), or on-device only later.
 7. **Which import formats matter most** to your first users (.docx assumed).
+8. **Beta group:** who gets early access (you, plus how many outside testers), and some of your real documents to use as fixtures.
+9. **Screen-reader and real-device testers:** people who can test on Safari, iOS, Android and a screen reader.
 
-## 10. Website and pricing implications
+## 10. Release quality: near-zero issues at launch
+
+Honest target: zero defects cannot be promised for any software. The launch bar is **no data loss, no security flaw, no crash on supported documents, and a published list of known limits.** Everything below exists to hit that bar.
+
+### Layout engine decision
+We build our own **layout core**: the code that decides where lines and pages break, using real font measurements, written as pure functions with no browser dependency. The browser still draws the text, so selection, spell check, input methods and screen-reader access keep working. A full custom renderer (drawing everything ourselves) is only chosen if the Phase 0 spike shows the browser's drawing blocks accuracy, because it costs far more and removes those native features. Bundled metric-compatible fonts (Carlito for Calibri, Caladea for Cambria, Liberation for Arial, Times New Roman and Courier New) make line and page breaks match Word's far more often.
+
+### Safety of the user's writing
+1. Before every save, an encrypted copy of the current document is kept in the browser's local storage, so a dropped connection or a crash never loses text.
+2. Saves carry a revision number; a conflicting save is detected and the user chooses, never silently overwritten.
+3. Version snapshots run automatically and before risky operations (import, replace all, restore, accept all changes).
+4. Every format change is versioned; old documents always open. A migration is tested on a fixture of every earlier version before it ships.
+5. Failing closed: if decryption or a conversion fails, the document is untouched and the user sees a clear message.
+
+### Test layers
+- **Layout core:** deterministic golden files. A fixed set of documents is laid out and every page break is compared. Random document generation (fuzzing) checks it never crashes, never loops and gives the same result twice.
+- **Fixture library:** the owner's real documents, documents made by Word, LibreOffice and Google Docs, and edge cases (very long tables, right-to-left text, emoji, nested lists, huge images). Every bug found becomes a permanent fixture.
+- **Round trips:** import, export, import again; text and structure must survive on every fixture.
+- **Visual regression:** screenshots of pages and the interface compared on every change, in Chromium, Firefox and WebKit.
+- **Performance budgets:** typing latency under 50 ms on a 100-page document, open time and memory limits, tested on every change.
+- **Security:** sanitiser fuzzing with hostile HTML, the encryption tests, and the outside review already planned for the platform.
+- **Accessibility:** automated audits plus real screen-reader testing by people who use one daily.
+- **Real devices:** Safari, iOS, Android and tablets, tested by invited testers because they cannot be reproduced from the development environment.
+
+### Staged release
+1. Feature flag, owner only.
+2. Invited beta with real users and real documents.
+3. Everyone, one release at a time (1a, 1b, 1c and so on), each after its exit criteria pass.
+
+**Exit criteria per release:** zero known data-loss bugs, zero open crashes on the fixture library, all golden and round-trip tests passing, performance budgets met, accessibility audit clean, beta period with no new data-loss or security reports, and the known-limits list published.
+
+### After launch
+- Error reports carry only the error type, browser and a size bucket for the document. Never any document content, titles or file names. Opt-in.
+- Each feature sits behind a flag so a problem can be switched off without a new release.
+- A public known-limits page says what does not match Word.
+
+## 11. Website and pricing implications
 
 - Personal and Business pages gain a Documents section only when Phase 1 ships. Real-time co-editing and shared folders are Business features and appear on the Business page only when Phase 4 ships.
 - Storage limits (5 GB Personal, 50 GB Business) now cover documents and images; the plan copy should say so.
