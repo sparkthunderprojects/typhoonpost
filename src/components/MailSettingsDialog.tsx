@@ -2,14 +2,15 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { Plus, Trash2, X } from 'lucide-react';
 import { useState } from 'react';
 import {
-  addSender, categoryDefs, folderTree, newId, removeQuickStep, removeRule, removeSender, removeTemplate, saveQuickStep, saveRule, saveTemplate, setAutoEmptyDays, setAutoReply, setUndoSendSeconds, usePrefs,
+  addSender, categoryDefs, folderTree, newId, removeQuickStep, removeRule, removeSender, removeTemplate, saveQuickStep, saveRule, saveSignatureItem, removeSignatureItem, setSignatureDefaults, setDeliveryDelay, saveTemplate, setAutoEmptyDays, setAutoReply, setUndoSendSeconds, usePrefs,
 } from '@/lib/prefs';
 import { emptyRule, type MailRule } from '@/lib/rules';
 import { ACTION_LABELS, type QuickAction, type QuickStep } from '@/lib/quicksteps';
 
-type Tab = 'sending' | 'rules' | 'quicksteps' | 'templates' | 'senders' | 'autoreply';
+type Tab = 'sending' | 'signatures' | 'rules' | 'quicksteps' | 'templates' | 'senders' | 'autoreply';
 const TABS: { id: Tab; label: string }[] = [
   { id: 'sending', label: 'Sending' },
+  { id: 'signatures', label: 'Signatures' },
   { id: 'rules', label: 'Rules' },
   { id: 'quicksteps', label: 'Quick steps' },
   { id: 'templates', label: 'Templates' },
@@ -70,6 +71,7 @@ export function MailSettingsDialog({ open, onClose, onRunRules }: Props) {
             </div>
             <div className="flex-1 overflow-y-auto p-4 scrollbar-thin">
               {tab === 'sending' && <SendingTab />}
+              {tab === 'signatures' && <SignaturesTab />}
               {tab === 'rules' && <RulesTab onRun={onRunRules} />}
               {tab === 'quicksteps' && <QuickStepsTab />}
               {tab === 'templates' && <TemplatesTab />}
@@ -101,6 +103,17 @@ function SendingTab() {
           <option value={30}>Hold for 30 seconds</option>
         </select>
         <p className="mt-1.5 text-xs text-fg-subtle">While a message is held you can take it back. If you close Typhoonpost during that time it is not sent, and stays in Drafts.</p>
+      </div>
+      <div>
+        <label htmlFor="delivery-delay" className={label}>Delay delivery of every message</label>
+        <select id="delivery-delay" value={prefs.deliveryDelayMin} onChange={(e) => setDeliveryDelay(Number(e.target.value))} className={field}>
+          <option value={0}>Don't delay</option>
+          <option value={1}>Hold for 1 minute</option>
+          <option value={5}>Hold for 5 minutes</option>
+          <option value={15}>Hold for 15 minutes</option>
+          <option value={60}>Hold for 1 hour</option>
+        </select>
+        <p className="mt-1.5 text-xs text-fg-subtle">Held messages wait in Drafts, as scheduled messages do, so you can still change or cancel them. They are sent from this browser while Typhoonpost is open.</p>
       </div>
       <div>
         <label htmlFor="auto-empty" className={label}>Empty Deleted Items automatically</label>
@@ -345,6 +358,43 @@ function TemplatesTab() {
           <input aria-label="Template subject" placeholder="Subject (optional)" className={`${field} mt-2`} value={t.subject} onChange={(e) => saveTemplate({ ...t, subject: e.target.value })} />
         </div>
       ))}
+    </div>
+  );
+}
+
+function SignaturesTab() {
+  const prefs = usePrefs();
+  return (
+    <div className="space-y-4">
+      <p className="text-xs leading-relaxed text-fg-subtle">Signatures are added under your message when you send it. Pick one for new messages and another for replies and forwards. You can change it for a single message from the pen button in the composer.</p>
+      {prefs.signatures.map((x) => (
+        <div key={x.id} className="rounded-lg border border-line p-3" data-testid="signature">
+          <div className="flex items-center gap-2">
+            <input aria-label="Signature name" className={field} value={x.name} onChange={(e) => saveSignatureItem({ ...x, name: e.target.value })} />
+            <button aria-label={`Delete ${x.name}`} onClick={() => removeSignatureItem(x.id)} className="rounded p-1.5 text-fg-subtle hover:bg-danger/10 hover:text-danger"><Trash2 className="h-4 w-4" /></button>
+          </div>
+          <textarea aria-label="Signature text" rows={3} className={`${field} mt-2 resize-none`} value={x.text} onChange={(e) => saveSignatureItem({ ...x, text: e.target.value })} />
+        </div>
+      ))}
+      <button onClick={() => { const id = saveSignatureItem({ name: 'New signature', text: '' }); if (prefs.signatures.length === 0) setSignatureDefaults(id, id); }} className="flex items-center gap-1 rounded bg-accent px-3 py-1.5 text-sm font-medium text-accent-fg"><Plus className="h-4 w-4" />New signature</button>
+      {prefs.signatures.length > 0 && (
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label htmlFor="sig-new" className={label}>For new messages</label>
+            <select id="sig-new" className={field} value={prefs.sigNew ?? ''} onChange={(e) => setSignatureDefaults(e.target.value || null, prefs.sigReply)}>
+              <option value="">None</option>
+              {prefs.signatures.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="sig-reply" className={label}>For replies and forwards</label>
+            <select id="sig-reply" className={field} value={prefs.sigReply ?? ''} onChange={(e) => setSignatureDefaults(prefs.sigNew, e.target.value || null)}>
+              <option value="">None</option>
+              {prefs.signatures.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+            </select>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

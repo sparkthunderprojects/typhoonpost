@@ -25,7 +25,7 @@ import {
   AlignLeft, AlignCenter, AlignRight, AlignJustify,
   List, ListOrdered, ListChecks, Quote, Code, Code2, Minus,
   Link as LinkIcon, Image as ImageIcon, Table as TableIcon, TableProperties,
-  Undo2, Redo2, X, Check, ChevronDown,
+  Undo2, Redo2, X, Check, ChevronDown, Smile,
 } from 'lucide-react';
 import { FontSize as CustomFontSize } from '@/components/editor/FontSize';
 
@@ -33,7 +33,13 @@ interface RichTextEditorProps {
   value: string;
   onChange: (html: string) => void;
   placeholder?: string;
+  /** People who can be @mentioned. Picking one writes their name and calls onMention. */
+  mentions?: { name: string; email: string }[];
+  onMention?: (person: { name: string; email: string }) => void;
 }
+
+const EMOJI = ['😀','😂','🙂','😉','😍','🥳','😎','🤔','😅','😢','😮','🙏','👍','👎','👏','🙌','💪','🎉','🔥','✨','❤️','💯','✅','❌','⚠️','📎','📅','⏰','💡','📌','☕','🚀'];
+const MAX_INLINE_IMAGE = 2 * 1024 * 1024;
 
 const FONT_FAMILIES = [
   { label: 'Sans', value: 'Inter, ui-sans-serif, system-ui, sans-serif' },
@@ -46,7 +52,11 @@ const FONT_SIZES = ['12px', '14px', '16px', '18px', '24px', '32px'];
 const TEXT_COLORS = ['#1a1a14', '#71717a', '#2563eb', '#dc2626', '#16a34a', '#f59e0b', '#ec4899', '#8b5cf6', '#ffffff', '#000000'];
 const HIGHLIGHT_COLORS = ['#fef08a', '#bbf7d0', '#bfdbfe', '#fecaca', '#fbcfe8', '#ddd6fe', 'transparent'];
 
-export function RichTextEditor({ value, onChange, placeholder = 'Write your message here...' }: RichTextEditorProps) {
+export function RichTextEditor({ value, onChange, placeholder = 'Write your message here...', mentions = [], onMention }: RichTextEditorProps) {
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const [mention, setMention] = useState<{ query: string; from: number; to: number } | null>(null);
+  const [mentionIdx, setMentionIdx] = useState(0);
+  const mentionRef = useRef<{ list: { name: string; email: string }[]; idx: number; pick: (i: number) => void } | null>(null);
   const [showCode, setShowCode] = useState(false);
   const [codeText, setCodeText] = useState('');
   const [linkOpen, setLinkOpen] = useState(false);
@@ -62,6 +72,26 @@ export function RichTextEditor({ value, onChange, placeholder = 'Write your mess
   const [fontSizeOpen, setFontSizeOpen] = useState(false);
   const [activeFontFamily, setActiveFontFamily] = useState('Sans');
   const toolbarRef = useRef<HTMLDivElement>(null);
+
+  const editorRef = useRef<ReturnType<typeof useEditor> | null>(null);
+  const insertImageFile = (file: File) => {
+    if (file.size > MAX_INLINE_IMAGE) { window.alert('Pictures pasted into a message can be up to 2 MB. Attach larger ones instead.'); return; }
+    const reader = new FileReader();
+    reader.onload = () => editorRef.current?.chain().focus().setImage({ src: reader.result as string }).run();
+    reader.readAsDataURL(file);
+  };
+  const detectMention = (ed: NonNullable<ReturnType<typeof useEditor>>) => {
+    if (!onMentionRef.current) return;
+    const { from, empty } = ed.state.selection;
+    if (!empty) { setMention(null); return; }
+    const before = ed.state.doc.textBetween(Math.max(0, from - 40), from, '\n', '\n');
+    const m = before.match(/(?:^|\s)@([\w.'’ -]{0,30})$/);
+    if (!m) { setMention(null); return; }
+    setMention({ query: m[1], from: from - m[1].length - 1, to: from });
+    setMentionIdx(0);
+  };
+  const onMentionRef = useRef(onMention);
+  onMentionRef.current = onMention;
 
   const editor = useEditor({
     extensions: [
@@ -91,13 +121,50 @@ export function RichTextEditor({ value, onChange, placeholder = 'Write your mess
     content: value,
     onUpdate: ({ editor }) => {
       onChange(editor.getHTML());
+      detectMention(editor);
     },
+    onSelectionUpdate: ({ editor }) => detectMention(editor),
     editorProps: {
       attributes: {
         class: 'tiptap-canvas',
       },
+      handleKeyDown: (_view, event) => {
+        const m = mentionRef.current;
+        if (!m || m.list.length === 0) return false;
+        if (event.key === 'ArrowDown') { setMentionIdx((i) => (i + 1) % m.list.length); return true; }
+        if (event.key === 'ArrowUp') { setMentionIdx((i) => (i + m.list.length - 1) % m.list.length); return true; }
+        if (event.key === 'Enter' || event.key === 'Tab') { m.pick(m.idx); return true; }
+        if (event.key === 'Escape') { setMention(null); return true; }
+        return false;
+      },
+      // Pasted or dropped pictures go into the message itself, as long as they are a sensible size.
+      handlePaste: (_view, event) => {
+        const file = Array.from(event.clipboardData?.files ?? []).find((f) => f.type.startsWith('image/'));
+        if (!file) return false;
+        insertImageFile(file);
+        return true;
+      },
+      handleDrop: (_view, event) => {
+        const file = Array.from((event as DragEvent).dataTransfer?.files ?? []).find((f) => f.type.startsWith('image/'));
+        if (!file) return false;
+        insertImageFile(file);
+        return true;
+      },
     },
   });
+
+  editorRef.current = editor;
+  const mentionList = mention
+    ? mentions.filter((c) => `${c.name} ${c.email}`.toLowerCase().includes(mention.query.trim().toLowerCase())).slice(0, 6)
+    : [];
+  const pickMention = (i: number) => {
+    const c = mentionList[i];
+    if (!c || !mention || !editor) return;
+    editor.chain().focus().insertContentAt({ from: mention.from, to: mention.to }, `<strong>@${c.name}</strong>&nbsp;`).run();
+    setMention(null);
+    onMention?.(c);
+  };
+  mentionRef.current = mention ? { list: mentionList, idx: mentionIdx, pick: pickMention } : null;
 
   // sync external value changes (e.g. prefill) when not focused
   useEffect(() => {
@@ -118,6 +185,7 @@ export function RichTextEditor({ value, onChange, placeholder = 'Write your mess
         setHighlightOpen(false);
         setFontFamilyOpen(false);
         setFontSizeOpen(false);
+        setEmojiOpen(false);
       }
     };
     document.addEventListener('mousedown', onClick);
@@ -393,6 +461,18 @@ export function RichTextEditor({ value, onChange, placeholder = 'Write your mess
           <ImageIcon className="h-4 w-4" />
         </TB>
         <div className="relative">
+          <TB title="Insert emoji" onClick={() => setEmojiOpen((v) => !v)}>
+            <Smile className="h-4 w-4" />
+          </TB>
+          <Popover open={emojiOpen}>
+            <div className="grid w-52 grid-cols-8 gap-0.5 p-2" data-testid="emoji-picker">
+              {EMOJI.map((e) => (
+                <button key={e} type="button" aria-label={`Insert ${e}`} onClick={() => { editor.chain().focus().insertContent(e).run(); setEmojiOpen(false); }} className="rounded p-1 text-lg leading-none hover:bg-bg-muted">{e}</button>
+              ))}
+            </div>
+          </Popover>
+        </div>
+        <div className="relative">
           <TB title="Insert table" onClick={() => setTableOpen((v) => !v)}>
             <TableIcon className="h-4 w-4" />
           </TB>
@@ -488,8 +568,18 @@ export function RichTextEditor({ value, onChange, placeholder = 'Write your mess
       </div>
 
       {/* Canvas */}
-      <div className="flex-1 overflow-y-auto scrollbar-thin">
+      <div className="relative flex-1 overflow-y-auto scrollbar-thin">
         <EditorContent editor={editor} />
+        {mention && mentionList.length > 0 && (
+          <div role="listbox" aria-label="Mention someone" data-testid="mention-list" className="sticky bottom-2 left-2 z-30 ml-2 w-72 overflow-hidden rounded-lg border border-line-strong bg-bg-subtle py-1 shadow-pop">
+            {mentionList.map((c, i) => (
+              <button key={c.email} role="option" aria-selected={i === mentionIdx} onMouseDown={(e) => { e.preventDefault(); pickMention(i); }} className={`flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-sm ${i === mentionIdx ? 'bg-accent-soft' : 'hover:bg-bg-muted'}`}>
+                <span className="truncate text-fg">{c.name}</span>
+                <span className="truncate text-xs text-fg-subtle">{c.email}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -100,6 +100,7 @@ export interface MoreMenuProps {
   onAddSender: () => void;
   senderKnown: boolean;
   onSaveAsDoc: () => void;
+  onForwardAsAttachment: () => void;
   onMarkAllRead: () => void;
   onEmptyDeleted: () => void;
 }
@@ -107,7 +108,7 @@ export interface MoreMenuProps {
 export function MoreMenu({
   hasEmail, ignored, focus, inFocused, onPrint, onSaveAs, onIgnore, onSenderFocus,
   senderBlocked, senderSafe, onBlock, onSafe, onSweep, onCleanUp,
-  onCreateTask, onCreateEvent, onAddSender, senderKnown, onSaveAsDoc, onMarkAllRead, onEmptyDeleted,
+  onCreateTask, onCreateEvent, onAddSender, senderKnown, onSaveAsDoc, onForwardAsAttachment, onMarkAllRead, onEmptyDeleted,
 }: MoreMenuProps) {
   const [open, setOpen] = useState(false);
   const run = (fn: () => void) => () => {
@@ -133,6 +134,7 @@ export function MoreMenu({
               <Item label="Print" onClick={run(onPrint)} />
               <Item label="Save as file (.eml)" onClick={run(onSaveAs)} />
               <Item label="Save as a Doc" onClick={run(onSaveAsDoc)} />
+              <Item label="Forward as attachment" onClick={run(onForwardAsAttachment)} />
               <div className="my-1 border-t border-line" />
               <Item label="Create a task" onClick={run(onCreateTask)} />
               <Item label="Create an event" onClick={run(onCreateEvent)} />

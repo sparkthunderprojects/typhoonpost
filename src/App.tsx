@@ -28,7 +28,7 @@ import { contactName, EVENT_COLORS } from '@/types';
 import {
   addSender, categoryDefs, folderName, folderTree, getPrefs, loadPrefs, markAutoReplied, newId, resetPrefs, saveRule, setIgnored,
   setRulesCheckedAt, setScheduled, setSenderFocus, usePrefs,
-  saveSearch, setTrashedAt,
+  saveSearch, setTrashedAt, saveSignatureItem, setSignatureDefaults, markSignaturesMigrated,
 } from '@/lib/prefs';
 import { messageToDoc } from '@/lib/mailToDoc';
 import { ordered, planAutoEmpty, type QuickStep } from '@/lib/quicksteps';
@@ -249,14 +249,6 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
     return addr;
   }, []);
 
-  const setSignature = useCallback(
-    (s: string) => {
-      setSignatureState(s);
-      saveSignature(userId, s).catch(() => push('Failed to save signature'));
-    },
-    [userId, push],
-  );
-
   // ---- Derived mail list ----
   const activeSearch = prefs.savedSearches.find((q) => q.id === activeSearchId) ?? null;
   const visibleEmails = useMemo(() => {
@@ -406,6 +398,17 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
       }),
     );
   }, []);
+
+  // The old single signature was kept readable on the server. Move it into the encrypted settings once.
+  useEffect(() => {
+    if (dataLoading || prefs.sigMigrated) return;
+    if (prefs.signatures.length === 0 && signature.trim()) {
+      const id = saveSignatureItem({ name: 'My signature', text: signature.trim() });
+      setSignatureDefaults(id, id);
+    }
+    markSignaturesMigrated();
+    saveSignature(userId, '').catch(() => {});
+  }, [dataLoading, prefs.sigMigrated, prefs.signatures.length, signature, userId]);
 
   const advanceSelection = useCallback(
     (currentId: string, dir: 1 | -1) => {
@@ -1152,6 +1155,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
   const [composerPrefillAttachments, setComposerPrefillAttachments] = useState<PayloadAttachment[] | undefined>(undefined);
 
   /** Starts a fresh compose session with exactly these fields; anything unset starts empty. */
+  const [composerReplyAll, setComposerReplyAll] = useState(false);
   const startCompose = useCallback(
     (f: {
       to?: Recipient[];
@@ -1161,7 +1165,9 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
       subject?: string;
       body?: string;
       attachments?: PayloadAttachment[];
+      replyAll?: boolean;
     }) => {
+      setComposerReplyAll(Boolean(f.replyAll));
       setComposerPrefillTo(f.to);
       setComposerPrefillCc(f.cc);
       setComposerPrefillBcc(f.bcc);
@@ -1211,9 +1217,26 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
         attachments: draft.keepAttachments
           ? email.attachments.map((a) => ({ name: a.name, size: a.size, kind: a.kind, file: a.file }))
           : undefined,
+        replyAll: mode === 'replyAll',
       });
     },
     [myAddress, userEmail, startCompose, toRecipient],
+  );
+
+  /** Forwards the whole message as a .eml file attached to a new message. */
+  const forwardAsAttachment = useCallback(
+    async (email: Email) => {
+      try {
+        const eml = toEml(email, cleanForOutput);
+        const file = new File([eml], fileNameFor(email, 'eml'), { type: 'message/rfc822' });
+        const att = await uploadAttachment(userId, file);
+        draftIdRef.current = null;
+        startCompose({ subject: /^(fw|fwd):/i.test(email.subject) ? email.subject : `Fwd: ${email.subject}`, attachments: [att] });
+      } catch {
+        push('Could not attach the message');
+      }
+    },
+    [userId, cleanForOutput, startCompose, push],
   );
 
   const closeComposer = useCallback(() => setComposerState('closed'), []);
@@ -1908,6 +1931,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
               onAddSender: () => activeEmail && addSenderToContacts(activeEmail),
               senderKnown: activeEmail ? contacts.some((c) => c.email.toLowerCase() === activeEmail.senderEmail.toLowerCase()) : false,
               onSaveAsDoc: () => activeEmail && saveAsDoc(activeEmail),
+              onForwardAsAttachment: () => activeEmail && forwardAsAttachment(activeEmail),
               onMarkAllRead: markAllRead,
               onEmptyDeleted: emptyDeleted,
               onSenderFocus: (choice) => {
@@ -2062,8 +2086,8 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
         prefillBody={composerPrefillBody}
         prefillAttachments={composerPrefillAttachments}
         sessionId={composerSession}
-        signature={signature}
         contacts={contacts}
+        replyAll={composerReplyAll}
       />
       <EventDetails event={detailsEvent} onClose={() => setDetailsEvent(null)} calendarName={detailsEvent ? subscriptions.find((x) => detailsEvent.id.startsWith(`sub:${x.id}:`))?.name : undefined} />
       <EventForm
@@ -2088,8 +2112,6 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
       <SettingsModal
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
-        signature={signature}
-        onSignatureChange={setSignature}
         accountEmail={userEmail}
         onSignOut={onSignOut}
         myAddress={myAddress}

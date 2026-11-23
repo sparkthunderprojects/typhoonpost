@@ -6,8 +6,6 @@ import { PrivacySettings } from '@/components/PrivacySettings';
 interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
-  signature: string;
-  onSignatureChange: (s: string) => void;
   accountEmail?: string;
   onSignOut?: () => void;
   myAddress?: string | null;
@@ -20,8 +18,6 @@ interface SettingsModalProps {
 export function SettingsModal({
   open,
   onClose,
-  signature,
-  onSignatureChange,
   accountEmail,
   onSignOut,
   myAddress,
@@ -138,19 +134,8 @@ export function SettingsModal({
               <PrivacySettings accountEmail={accountEmail} onExportData={onExportData} onAccountDeleted={onAccountDeleted} onChangePassword={onChangePassword} />
             )}
             <div className="p-4">
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-fg-subtle">
-                Email signature
-              </label>
-              <p className="mb-2 text-2xs text-fg-subtle">
-                Appended to the bottom of emails you compose.
-              </p>
-              <textarea
-                value={signature}
-                onChange={(e) => onSignatureChange(e.target.value)}
-                placeholder="e.g. Alex Rivera · Product Engineer · Quill"
-                rows={4}
-                className="w-full resize-none rounded-xl border border-line bg-bg px-3 py-2.5 text-sm text-fg placeholder:text-fg-subtle focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent scrollbar-thin"
-              />
+              <p className="text-xs font-semibold uppercase tracking-wider text-fg-subtle">Email signatures</p>
+              <p className="mt-1.5 text-2xs text-fg-subtle">Signatures are encrypted with the rest of your mail settings. Add and choose them in Mail settings, on the Signatures tab.</p>
             </div>
             {onSignOut && (
               <div className="border-t border-line px-4 py-3">

@@ -13,11 +13,14 @@ import {
   CalendarClock,
   FileText,
   LayoutTemplate,
+  PenLine,
+  Info,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { Contact, Importance } from '@/types';
 import type { PayloadAttachment } from '@/lib/crypto/envelope';
-import { MAX_TOTAL_BYTES } from '@/lib/db';
+import { MAX_TOTAL_BYTES, lookupPublicKeys } from '@/lib/db';
+import { mailTips, pickSignature, signatureHtml, type Tip } from '@/lib/mailtips';
 import { AttachmentIcon } from '@/components/AttachmentIcon';
 import { RecipientField, type Recipient } from '@/components/RecipientField';
 import { removeTemplate, saveTemplate, usePrefs } from '@/lib/prefs';
@@ -63,8 +66,9 @@ interface ComposerProps {
   prefillAttachments?: PayloadAttachment[];
   /** Changes whenever a new compose session starts, so a resumed draft replaces what was typed. */
   sessionId?: number;
-  signature?: string;
   contacts: Contact[];
+  /** True when this started as a reply to everyone, so a large group can be flagged. */
+  replyAll?: boolean;
 }
 
 /** Text-only comparison key: the editor rewrites HTML on load, so markup differences do not count. */
@@ -103,8 +107,8 @@ export function Composer({
   prefillBody,
   prefillAttachments,
   sessionId,
-  signature,
   contacts,
+  replyAll,
 }: ComposerProps) {
   const [toRecipients, setToRecipients] = useState<Recipient[]>([]);
   const [ccRecipients, setCcRecipients] = useState<Recipient[]>([]);
@@ -118,7 +122,11 @@ export function Composer({
   const [attachments, setAttachments] = useState<PayloadAttachment[]>([]);
   const [uploading, setUploading] = useState(0);
   const prefs = usePrefs();
-  const [menu, setMenu] = useState<null | 'templates' | 'docs'>(null);
+  const [menu, setMenu] = useState<null | 'templates' | 'docs' | 'signature'>(null);
+  const [sigId, setSigId] = useState<string | null>(null);
+  const [tips, setTips] = useState<Tip[] | null>(null);
+  const [inside, setInside] = useState<Set<string>>(new Set());
+  const [checked, setChecked] = useState<Set<string>>(new Set());
   const [docList, setDocList] = useState<DocSummary[] | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const appliedSession = useRef<number | undefined>(undefined);
@@ -141,6 +149,8 @@ export function Composer({
         setSubject(prefillSubject ?? '');
         setBody(prefillBody ?? '');
         setAttachments(prefillAttachments ?? []);
+        setTips(null);
+        setSigId(pickSignature(prefs.signatures, prefs.sigNew, prefs.sigReply, /^(re|fw|fwd):\s/i.test(prefillSubject ?? ''))?.id ?? null);
         baseline.current = fingerprint(
           (prefillTo ?? []).map((r) => r.email).join(','),
           (prefillCc ?? []).map((r) => r.email).join(','),
@@ -168,12 +178,11 @@ export function Composer({
     bcc: bccStr,
     importance,
     subject,
-    body: withSignature ? body + signatureHtml : body,
+    body: withSignature ? body + sigHtml : body,
     attachments,
   });
-  const signatureHtml = signature
-    ? `<p style="color: rgb(var(--fg-subtle)); margin-top: 1.5rem;">— ${signature}</p>`
-    : '';
+  const sig = prefs.signatures.find((x) => x.id === sigId);
+  const sigHtml = sig ? signatureHtml(sig.text) : '';
 
   // autosave to drafts
   useEffect(() => {
@@ -186,22 +195,21 @@ export function Composer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [toStr, ccStr, bccStr, importance, subject, body, attachments, state]);
 
+  // Which recipients are on Typhoonpost, worked out here so the outside note is live as you type.
+  useEffect(() => {
+    const todo = [...toRecipients, ...ccRecipients, ...bccRecipients].map((r) => r.email).filter((a) => !checked.has(a));
+    if (todo.length === 0) return;
+    let cancelled = false;
+    const t = setTimeout(() => {
+      lookupPublicKeys(todo).then((keys) => {
+        if (cancelled) return;
+        setChecked((c) => new Set([...c, ...todo]));
+        setInside((i) => new Set([...i, ...todo.filter((a) => keys.has(a))]));
+      }).catch(() => {});
+    }, 400);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [toRecipients, ccRecipients, bccRecipients, checked]);
   if (state === 'closed') return null;
-
-  const handleSend = () => {
-    if (!toRecipients.length) return;
-    if (uploading) return;
-    onSend({ ...collect(true), subject: subject.trim() || '(No subject)' });
-    setAttachments([]);
-    setToRecipients([]);
-    setCcRecipients([]);
-    setBccRecipients([]);
-    setImportance('normal');
-    setSubject('');
-    setBody('');
-    baseline.current = fingerprint('', '', '', 'normal', '', '', 0);
-    dirtyRef.current = false;
-  };
 
   const clearAll = () => {
     setAttachments([]);
@@ -211,9 +219,35 @@ export function Composer({
     setImportance('normal');
     setSubject('');
     setBody('');
+    setTips(null);
     baseline.current = fingerprint('', '', '', 'normal', '', '', 0);
     dirtyRef.current = false;
   };
+
+  const finishSend = () => {
+    const data = { ...collect(true), subject: subject.trim() || '(No subject)' };
+    // A standing delivery delay holds every message, the same way Schedule send does.
+    if (prefs.deliveryDelayMin > 0) onSchedule(data, new Date(Date.now() + prefs.deliveryDelayMin * 60_000));
+    else onSend(data);
+    clearAll();
+  };
+
+  /** Things to check before sending. The outside-provider note is shown beside the recipients instead. */
+  const blockingTips = (): Tip[] =>
+    mailTips({
+      to: toRecipients.map((r) => r.email), cc: ccRecipients.map((r) => r.email), bcc: bccRecipients.map((r) => r.email),
+      subject, body, attachmentCount: attachments.length, isReplyAll: Boolean(replyAll), inside: () => true,
+    });
+
+  const handleSend = () => {
+    if (!toRecipients.length) return;
+    if (uploading) return;
+    const t = blockingTips();
+    if (t.length) { setTips(t); return; }
+    finishSend();
+  };
+
+  const outsideNow = [...toRecipients, ...ccRecipients, ...bccRecipients].map((r) => r.email).filter((a) => checked.has(a) && !inside.has(a));
 
   const handleSchedule = (at: Date) => {
     if (!toRecipients.length || uploading) return;
@@ -435,14 +469,33 @@ export function Composer({
           </div>
         )}
 
+        {outsideNow.length > 0 && (
+          <p data-testid="outside-note" className="flex items-start gap-2 border-b border-line bg-bg-muted px-3 py-1.5 text-xs text-fg-muted">
+            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            {outsideNow.length === 1 ? `${outsideNow[0]} is not on Typhoonpost. Their copy goes through an outside mail provider, which can read it.` : `${outsideNow.length} recipients are not on Typhoonpost. Their copies go through an outside mail provider, which can read them.`}
+          </p>
+        )}
+
         {/* WYSIWYG editor */}
         <RichTextEditor
           key={editorKey.current}
           value={body}
           onChange={setBody}
           placeholder="Write your message here..."
+          mentions={contacts.filter((c) => c.email).map((c) => ({ name: `${c.firstName} ${c.lastName}`.trim() || c.email, email: c.email }))}
+          onMention={(c) => setToRecipients((prev) => (prev.some((r) => r.email.toLowerCase() === c.email.toLowerCase()) ? prev : [...prev, { id: c.email, name: c.name, email: c.email }]))}
         />
       </div>
+
+      {tips && (
+        <div role="alertdialog" aria-label="Before you send" data-testid="mail-tips" className="border-t border-line bg-warn/10 px-3 py-2.5 text-sm text-fg">
+          <ul className="space-y-1">{tips.map((t) => <li key={t.id} className="flex items-start gap-2"><Info className="mt-0.5 h-4 w-4 shrink-0 text-warn" />{t.text}</li>)}</ul>
+          <div className="mt-2 flex justify-end gap-2">
+            <button onClick={() => setTips(null)} className="rounded px-3 py-1 text-sm hover:bg-bg-muted">Go back</button>
+            <button onClick={finishSend} className="rounded bg-accent px-3 py-1 text-sm font-medium text-accent-fg">Send anyway</button>
+          </div>
+        </div>
+      )}
 
       {/* Footer send bar */}
       <div className="flex items-center gap-2 border-t border-line bg-bg-muted px-3 py-2">
@@ -491,6 +544,23 @@ export function Composer({
                 <div className="border-t border-line">
                   <button role="menuitem" onClick={saveAsTemplate} className="block w-full px-3 py-2 text-left text-sm text-accent hover:bg-bg-muted">Save this message as a template</button>
                 </div>
+              </div>
+            </>
+          )}
+        </div>
+        <div className="relative">
+          <button onClick={() => setMenu((m) => (m === 'signature' ? null : 'signature'))} className="rounded-lg p-1.5 text-fg-subtle transition-colors hover:bg-bg hover:text-fg" title="Signature" aria-label="Signature" aria-haspopup="menu" aria-expanded={menu === 'signature'}>
+            <PenLine className="h-4 w-4" />
+          </button>
+          {menu === 'signature' && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setMenu(null)} />
+              <div role="menu" aria-label="Signature" className="absolute bottom-full left-0 z-50 mb-1 max-h-64 w-56 overflow-y-auto rounded-lg border border-line-strong bg-bg-subtle py-1 shadow-pop">
+                <button role="menuitemradio" aria-checked={sigId === null} onClick={() => { setSigId(null); setMenu(null); }} className="block w-full px-3 py-2 text-left text-sm text-fg hover:bg-bg-muted">No signature</button>
+                {prefs.signatures.map((x) => (
+                  <button key={x.id} role="menuitemradio" aria-checked={sigId === x.id} onClick={() => { setSigId(x.id); setMenu(null); }} className={`block w-full truncate px-3 py-2 text-left text-sm hover:bg-bg-muted ${sigId === x.id ? 'font-semibold text-accent' : 'text-fg'}`}>{x.name}</button>
+                ))}
+                {prefs.signatures.length === 0 && <p className="px-3 py-2 text-xs text-fg-subtle">Add signatures in Mail settings.</p>}
               </div>
             </>
           )}

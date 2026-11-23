@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { decryptRecord, encryptRecord } from '@/lib/crypto/record';
 import { getPrivateKey } from '@/lib/crypto/keyStore';
 import { ownPublicKey } from '@/lib/db';
+import type { Signature } from '@/lib/mailtips';
 import { FOLDER_NAMES, LABEL_DEFS, type FolderId, type LabelDef } from '@/types';
 
 /**
@@ -58,6 +59,14 @@ export interface Prefs {
   autoEmptyDays: number;
   /** Message id → when this browser first saw it in Deleted Items. Auto-empty counts days from here. */
   trashedAt: Record<string, string>;
+  signatures: Signature[];
+  /** Which signature goes on new mail, and on replies and forwards. */
+  sigNew: string | null;
+  sigReply: string | null;
+  /** Set once the old single signature has been moved here. */
+  sigMigrated: boolean;
+  /** Minutes every message is held before it goes out. 0 sends straight away. */
+  deliveryDelayMin: number;
 }
 
 export interface SavedSearch { id: string; name: string; query: string }
@@ -105,6 +114,11 @@ export const DEFAULT_PREFS: Prefs = {
   quickSteps: DEFAULT_QUICK_STEPS,
   autoEmptyDays: 0,
   trashedAt: {},
+  signatures: [],
+  sigNew: null,
+  sigReply: null,
+  sigMigrated: false,
+  deliveryDelayMin: 0,
 };
 
 let state: Prefs = DEFAULT_PREFS;
@@ -366,3 +380,17 @@ export const saveQuickStep = (q: QuickStep) =>
 export const removeQuickStep = (id: string) => updatePrefs((p) => ({ ...p, quickSteps: p.quickSteps.filter((x) => x.id !== id) }));
 export const setAutoEmptyDays = (autoEmptyDays: number) => updatePrefs((p) => ({ ...p, autoEmptyDays }));
 export const setTrashedAt = (trashedAt: Record<string, string>) => updatePrefs((p) => ({ ...p, trashedAt }));
+export const saveSignatureItem = (sig: Omit<Signature, 'id'> & { id?: string }): string => {
+  const id = sig.id ?? newId();
+  updatePrefs((p) => {
+    const next = { id, name: sig.name.trim() || 'Signature', text: sig.text };
+    const exists = p.signatures.some((x) => x.id === id);
+    return { ...p, signatures: exists ? p.signatures.map((x) => (x.id === id ? next : x)) : [...p.signatures, next] };
+  });
+  return id;
+};
+export const removeSignatureItem = (id: string) =>
+  updatePrefs((p) => ({ ...p, signatures: p.signatures.filter((x) => x.id !== id), sigNew: p.sigNew === id ? null : p.sigNew, sigReply: p.sigReply === id ? null : p.sigReply }));
+export const setSignatureDefaults = (sigNew: string | null, sigReply: string | null) => updatePrefs((p) => ({ ...p, sigNew, sigReply }));
+export const markSignaturesMigrated = () => updatePrefs((p) => ({ ...p, sigMigrated: true }));
+export const setDeliveryDelay = (deliveryDelayMin: number) => updatePrefs((p) => ({ ...p, deliveryDelayMin }));
