@@ -1,0 +1,13 @@
+{
+  "/_global-error/page": "/_global-error",
+  "/_not-found/page": "/_not-found",
+  "/early-access/page": "/early-access",
+  "/icon.svg/route": "/icon.svg",
+  "/manifest.webmanifest/route": "/manifest.webmanifest",
+  "/opengraph-image/route": "/opengraph-image",
+  "/page": "/",
+  "/pricing/page": "/pricing",
+  "/robots.txt/route": "/robots.txt",
+  "/security/page": "/security",
+  "/sitemap.xml/route": "/sitemap.xml"
+}

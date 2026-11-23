@@ -1,0 +1,15 @@
+{
+  "node": {
+    "60b5093f06aee7e321b741825e2f92a4ec87af214a": {
+      "workers": {
+        "app/page": {
+          "moduleId": 36378,
+          "async": false
+        }
+      },
+      "exportedName": "joinEarlyAccess",
+      "filename": "app/early-access/actions.ts"
+    }
+  },
+  "edge": {}
+}

@@ -18,22 +18,7 @@ Optional: `npm run dev:all` also starts the Express/Nodemailer server for live m
 
 Database schema lives in `supabase/migrations/`.
 
-## Public website (`website/`)
+## Public website
 
-The marketing site lives in `website/` as a separate Next.js (App Router, server-rendered) app. It is
-deployed on its own, for example as a second Vercel project with **Root Directory = `website`**.
-
-```bash
-cd website
-cp .env.example .env.local   # add NEXT_PUBLIC_SUPABASE_ANON_KEY
-npm install
-npm run dev                  # http://localhost:3000
-```
-
-- Content (features, plans, FAQs) is read from the Supabase tables `site_features`, `site_plans` and
-  `site_faqs` and refreshed every 5 minutes, so you can edit copy and prices in the Supabase dashboard
-  without redeploying. Built-in fallback copy is used if the database is unreachable.
-- Early-access sign-ups are written to `site_leads` (insert-only for the public; read them in the dashboard).
-- SEO: per-page metadata and canonicals, Open Graph image, `sitemap.xml`, `robots.txt`, web manifest and
-  JSON-LD (Organization, WebSite, SoftwareApplication, FAQPage, Product, BreadcrumbList).
-- Set `NEXT_PUBLIC_SITE_URL` to the production domain and `NEXT_PUBLIC_APP_URL` to wherever the mail app is hosted.
+The marketing site is a separate Next.js project: `sparkthunderprojects/typhoonpost-website`.
+It shares this Supabase project (tables `site_features`, `site_plans`, `site_faqs`, `site_leads`).

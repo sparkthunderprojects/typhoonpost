@@ -1,0 +1,20 @@
+{
+  "node": {
+    "60b5093f06aee7e321b741825e2f92a4ec87af214a": {
+      "workers": {
+        "app/early-access/page": {
+          "moduleId": 23956,
+          "async": false
+        },
+        "app/page": {
+          "moduleId": 36378,
+          "async": false
+        }
+      },
+      "filename": "app/early-access/actions.ts",
+      "exportedName": "joinEarlyAccess"
+    }
+  },
+  "edge": {},
+  "encryptionKey": "Jb/9eq203IbG+d9G6TWXzIFV5A53XWc00yyzku/1ElE="
+}

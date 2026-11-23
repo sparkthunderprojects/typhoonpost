@@ -1,0 +1,12 @@
+{
+  "app": {
+    "[project]/app/_not-found/page": [],
+    "[project]/app/early-access/page": [],
+    "[project]/app/page": [],
+    "[project]/app/pricing/page": [],
+    "[project]/app/security/page": []
+  },
+  "appUsingSizeAdjust": true,
+  "pages": {},
+  "pagesUsingSizeAdjust": false
+}
