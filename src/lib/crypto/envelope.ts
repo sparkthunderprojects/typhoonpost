@@ -18,6 +18,8 @@ export interface PayloadAttachment {
   name: string;
   size: string;
   kind: 'image' | 'doc' | 'pdf' | 'slide' | 'sheet';
+  /** Set when the file is stored: bucket object id, base64 per-file key, type and byte length. */
+  file?: { id: string; key: string; mime: string; bytes: number };
 }
 
 /** Everything the server must not be able to read. */

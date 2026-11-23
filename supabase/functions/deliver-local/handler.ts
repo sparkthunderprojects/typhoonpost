@@ -20,6 +20,8 @@ export interface DeliverDb {
   countDeliveriesSince(userId: string, sinceIso: string): Promise<number>;
   insertEmail(row: Record<string, unknown>): Promise<void>;
   logDelivery(userId: string): Promise<void>;
+  /** Copies one stored (encrypted) attachment object from one path to another. */
+  copyFile(fromPath: string, toPath: string): Promise<void>;
 }
 
 export interface Delivery {
@@ -28,18 +30,22 @@ export interface Delivery {
   payload: string;
   key: string;
   size: number;
+  /** Ids of encrypted attachment files in the sender's folder to copy into the recipient's. */
+  files?: string[];
 }
 
 export interface DeliveryResult {
   address: string;
   ok: boolean;
-  error?: 'unknown_recipient' | 'no_keys' | 'invalid' | 'limit';
+  error?: 'unknown_recipient' | 'no_keys' | 'invalid' | 'limit' | 'attachment_failed';
 }
 
 export const DAILY_DELIVERY_LIMIT = 300;
 const MAX_DELIVERIES = 50;
 const MAX_FIELD_CHARS = 2_000_000;
 const EMAIL_RE = /^[^\s@<>"',;]+@[^\s@<>"',;]+\.[^\s@<>"',;]+$/;
+const MAX_FILES = 10;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const B64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 
 export const cors = {
@@ -67,7 +73,9 @@ function valid(d: unknown): d is Delivery {
     B64_RE.test(x.payload) &&
     B64_RE.test(x.key) &&
     Number.isInteger(x.size) &&
-    (x.size as number) >= 0
+    (x.size as number) >= 0 &&
+    (x.files === undefined ||
+      (Array.isArray(x.files) && x.files.length <= MAX_FILES && x.files.every((f) => typeof f === 'string' && UUID_RE.test(f))))
   );
 }
 
@@ -107,6 +115,15 @@ export async function handleDeliver(req: Request, caller: Caller | null, db: Del
     }
     if (!recipient.public_key) {
       results.push({ address, ok: false, error: 'no_keys' });
+      continue;
+    }
+    // Copy the encrypted files first. The same ids are used in the recipient's folder, so the
+    // message (which holds the ids and keys) needs no change. Only the sender's own folder can
+    // be a source.
+    try {
+      for (const id of raw.files ?? []) await db.copyFile(`${caller.userId}/${id}`, `${recipient.user_id}/${id}`);
+    } catch {
+      results.push({ address, ok: false, error: 'attachment_failed' });
       continue;
     }
     const attest = sealAttestation(caller.address, raw.payload, fromBase64(recipient.public_key));

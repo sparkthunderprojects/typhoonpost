@@ -26,6 +26,10 @@ const db: DeliverDb = {
     const { error } = await admin.from('emails').insert(row);
     if (error) throw new Error(error.message);
   },
+  async copyFile(fromPath, toPath) {
+    const { error } = await admin.storage.from('attachments').copy(fromPath, toPath);
+    if (error) throw new Error(error.message);
+  },
   async logDelivery(userId) {
     const { error } = await admin.from('delivery_log').insert({ user_id: userId });
     if (error) throw new Error(error.message);

@@ -20,6 +20,17 @@ export interface Attachment {
   size: string;
   kind: 'image' | 'doc' | 'pdf' | 'slide' | 'sheet';
   url?: string;
+  /** Present when the file itself is stored (encrypted) and can be downloaded. */
+  file?: AttachmentFile;
+}
+
+export interface AttachmentFile {
+  /** Name of the ciphertext object in the attachments bucket (inside the owner's folder). */
+  id: string;
+  /** base64 per-file key. Only ever held inside the encrypted message. */
+  key: string;
+  mime: string;
+  bytes: number;
 }
 
 export interface Email {
@@ -77,7 +88,19 @@ export const FOLDER_NAMES: Record<FolderId, string> = {
   snoozed: 'Snoozed',
 };
 
-export type AppView = 'mail' | 'contacts' | 'calendar';
+export type AppView = 'mail' | 'contacts' | 'calendar' | 'tasks';
+
+export interface Task {
+  id: string;
+  title: string;
+  notes: string;
+  /** Due date as YYYY-MM-DD, or null. */
+  due: string | null;
+  important: boolean;
+  done: boolean;
+  completedAt: string | null;
+  createdAt: string;
+}
 
 export interface CalendarEvent {
   id: string;

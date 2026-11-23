@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabase';
-import { encryptMessage } from '@/lib/crypto/envelope';
+import { encryptMessage, type PayloadAttachment } from '@/lib/crypto/envelope';
 import type { Email } from '@/types';
 import { deliverLocal, insertEmail, lookupPublicKeys, sendViaResend, type LocalDelivery } from '@/lib/db';
 
@@ -25,6 +25,7 @@ const REASONS: Record<string, string> = {
   unknown_recipient: 'that address no longer exists',
   no_keys: 'they have not finished setting up their mailbox',
   limit: 'the daily sending limit was reached',
+  attachment_failed: 'the attachments could not be delivered',
   invalid: 'the message was rejected',
 };
 
@@ -41,6 +42,7 @@ interface SendArgs {
   to: string;
   subject: string;
   body: string;
+  attachments?: PayloadAttachment[];
 }
 
 /**
@@ -48,7 +50,7 @@ interface SendArgs {
  * browser encrypts to their own key (it never passes through an outside mail provider). Everyone
  * else goes through the mail provider, which has to see the message to send it.
  */
-export async function sendMessage({ userId, myAddress, to, subject, body }: SendArgs): Promise<SendOutcome> {
+export async function sendMessage({ userId, myAddress, to, subject, body, attachments = [] }: SendArgs): Promise<SendOutcome> {
   const recipients = parseRecipients(to);
   const preview = body.replace(/<[^>]+>/g, '').slice(0, 120) || '(no content)';
 
@@ -66,6 +68,7 @@ export async function sendMessage({ userId, myAddress, to, subject, body }: Send
     labels: [],
     category: 'primary',
     toAddresses: recipients,
+    payloadAttachments: attachments,
   });
 
   const delivered: string[] = [];
@@ -84,7 +87,16 @@ export async function sendMessage({ userId, myAddress, to, subject, body }: Send
   }
 
   const local = recipients.filter((r) => keys.has(r));
-  const external = recipients.filter((r) => !keys.has(r));
+  let external = recipients.filter((r) => !keys.has(r));
+
+  // Files are stored encrypted for Typhoonpost recipients only. The outside mail path carries
+  // message text, not files, so say so instead of sending the message without them.
+  if (attachments.length && external.length) {
+    for (const address of external) {
+      failed.push({ address, reason: 'attachments can only be sent to Typhoonpost addresses for now. Send it again without the attachment' });
+    }
+    external = [];
+  }
 
   if (local.length) {
     const { data: profile } = await supabase.from('profiles').select('display_name').eq('id', userId).maybeSingle();
@@ -101,11 +113,18 @@ export async function sendMessage({ userId, myAddress, to, subject, body }: Send
           category: 'primary',
           to: recipients,
           cc: [],
-          attachments: [],
+          attachments,
         },
         keys.get(address)!,
       );
-      return { address, version: enc.version, payload: enc.payload, key: enc.key, size: body.length };
+      return {
+        address,
+        version: enc.version,
+        payload: enc.payload,
+        key: enc.key,
+        size: body.length,
+        files: attachments.flatMap((a) => (a.file ? [a.file.id] : [])),
+      };
     });
     try {
       for (const r of await deliverLocal(deliveries)) {

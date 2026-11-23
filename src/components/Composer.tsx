@@ -11,6 +11,9 @@ import {
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { Contact } from '@/types';
+import type { PayloadAttachment } from '@/lib/crypto/envelope';
+import { MAX_TOTAL_BYTES } from '@/lib/db';
+import { AttachmentIcon } from '@/components/AttachmentIcon';
 import { RecipientField, type Recipient } from '@/components/RecipientField';
 import { RichTextEditor } from '@/components/editor/RichTextEditor';
 
@@ -22,11 +25,18 @@ interface ComposerProps {
   onMinimize: () => void;
   onMaximize: () => void;
   onRestore: () => void;
-  onSend: (to: string, subject: string, body: string) => void;
+  onSend: (to: string, subject: string, body: string, attachments: PayloadAttachment[]) => void;
   onDiscard: () => void;
-  onAutosave: (to: string, subject: string, body: string) => void;
+  onAutosave: (to: string, subject: string, body: string, attachments: PayloadAttachment[]) => void;
+  onUploadFile: (file: File) => Promise<PayloadAttachment>;
+  onRemoveFile: (fileId: string) => void;
+  onError: (message: string) => void;
   prefillTo?: Recipient[];
   prefillSubject?: string;
+  prefillBody?: string;
+  prefillAttachments?: PayloadAttachment[];
+  /** Changes whenever a new compose session starts, so a resumed draft replaces what was typed. */
+  sessionId?: number;
   signature?: string;
   contacts: Contact[];
 }
@@ -40,8 +50,14 @@ export function Composer({
   onSend,
   onDiscard,
   onAutosave,
+  onUploadFile,
+  onRemoveFile,
+  onError,
   prefillTo,
   prefillSubject,
+  prefillBody,
+  prefillAttachments,
+  sessionId,
   signature,
   contacts,
 }: ComposerProps) {
@@ -51,6 +67,10 @@ export function Composer({
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
   const [showCc, setShowCc] = useState(false);
+  const [attachments, setAttachments] = useState<PayloadAttachment[]>([]);
+  const [uploading, setUploading] = useState(0);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const appliedSession = useRef<number | undefined>(undefined);
   const dirtyRef = useRef(false);
   const editorKey = useRef(0);
 
@@ -58,11 +78,17 @@ export function Composer({
     if (state === 'open' || state === 'fullscreen') {
       if (prefillTo) setToRecipients(prefillTo);
       if (prefillSubject) setSubject(prefillSubject);
+      // A resumed draft replaces what is in the editor, once per resume.
+      if (sessionId !== undefined && appliedSession.current !== sessionId) {
+        appliedSession.current = sessionId;
+        setBody(prefillBody ?? '');
+        setAttachments(prefillAttachments ?? []);
+      }
       // remount editor so it picks up fresh content on a new compose session
       editorKey.current += 1;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state]);
+  }, [state, sessionId]);
 
   const allEmails = [...toRecipients, ...ccRecipients, ...bccRecipients]
     .map((r) => r.email)
@@ -71,12 +97,12 @@ export function Composer({
   // autosave to drafts
   useEffect(() => {
     if (state === 'closed') return;
-    dirtyRef.current = !!(allEmails || subject || body);
+    dirtyRef.current = !!(allEmails || subject || body || attachments.length);
     if (!dirtyRef.current) return;
-    const t = setTimeout(() => onAutosave(allEmails, subject, body), 1500);
+    const t = setTimeout(() => onAutosave(allEmails, subject, body, attachments), 1500);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allEmails, subject, body, state]);
+  }, [allEmails, subject, body, attachments, state]);
 
   if (state === 'closed') return null;
 
@@ -86,7 +112,9 @@ export function Composer({
       ? `<p style="color: rgb(var(--fg-subtle)); margin-top: 1.5rem;">— ${signature}</p>`
       : '';
     const fullBody = body + sigHtml;
-    onSend(allEmails, subject.trim() || '(No subject)', fullBody);
+    if (uploading) return;
+    onSend(allEmails, subject.trim() || '(No subject)', fullBody, attachments);
+    setAttachments([]);
     setToRecipients([]);
     setCcRecipients([]);
     setBccRecipients([]);
@@ -96,11 +124,40 @@ export function Composer({
   };
 
   const handleClose = () => {
-    if (dirtyRef.current) onAutosave(allEmails, subject, body);
+    if (dirtyRef.current) onAutosave(allEmails, subject, body, attachments);
     onClose();
   };
 
+  const addFiles = async (files: FileList | null) => {
+    if (!files) return;
+    let total = attachments.reduce((n, a) => n + (a.file?.bytes ?? 0), 0);
+    for (const f of Array.from(files)) {
+      if (total + f.size > MAX_TOTAL_BYTES) {
+        onError('Attachments can add up to 25 MB per message');
+        break;
+      }
+      total += f.size;
+      setUploading((n) => n + 1);
+      try {
+        const att = await onUploadFile(f);
+        setAttachments((prev) => [...prev, att]);
+      } catch (e) {
+        onError(e instanceof Error ? e.message : `Could not attach ${f.name}`);
+      } finally {
+        setUploading((n) => n - 1);
+      }
+    }
+    if (fileInput.current) fileInput.current.value = '';
+  };
+
+  const removeAttachment = (a: PayloadAttachment) => {
+    setAttachments((prev) => prev.filter((x) => x !== a));
+    if (a.file) onRemoveFile(a.file.id);
+  };
+
   const handleDiscard = () => {
+    attachments.forEach((a) => a.file && onRemoveFile(a.file.id));
+    setAttachments([]);
     setToRecipients([]);
     setCcRecipients([]);
     setBccRecipients([]);
@@ -224,6 +281,21 @@ export function Composer({
           />
         </div>
 
+        {attachments.length > 0 && (
+          <div className="flex flex-wrap gap-2 border-b border-line px-4 py-2" data-testid="composer-attachments">
+            {attachments.map((a) => (
+              <span key={a.file?.id ?? a.name} className="flex items-center gap-2 rounded-lg border border-line bg-bg px-2 py-1 text-xs text-fg">
+                <AttachmentIcon kind={a.kind} className="h-3.5 w-3.5" />
+                <span className="max-w-[160px] truncate">{a.name}</span>
+                <span className="text-fg-subtle">{a.size}</span>
+                <button onClick={() => removeAttachment(a)} aria-label={`Remove ${a.name}`} className="text-fg-subtle hover:text-danger">
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+
         {/* WYSIWYG editor */}
         <RichTextEditor
           key={editorKey.current}
@@ -235,12 +307,16 @@ export function Composer({
 
       {/* Footer send bar */}
       <div className="flex items-center gap-2 border-t border-line bg-bg-muted px-3 py-2">
+        <input ref={fileInput} type="file" multiple hidden onChange={(e) => addFiles(e.target.files)} data-testid="attach-input" />
         <button
+          onClick={() => fileInput.current?.click()}
           className="rounded-lg p-1.5 text-fg-subtle transition-colors hover:bg-bg hover:text-fg"
           title="Attach file"
+          aria-label="Attach file"
         >
           <Paperclip className="h-4 w-4" />
         </button>
+        {uploading > 0 && <span className="text-2xs text-fg-subtle">Encrypting and uploading…</span>}
         <div className="ml-auto flex items-center gap-2">
           <button
             onClick={handleDiscard}
@@ -251,7 +327,7 @@ export function Composer({
           </button>
           <button
             onClick={handleSend}
-            disabled={!toRecipients.length}
+            disabled={!toRecipients.length || uploading > 0}
             className="flex items-center gap-2 rounded-lg bg-accent px-3.5 py-1.5 text-sm font-semibold text-accent-fg shadow-soft transition-all hover:brightness-105 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Send className="h-3.5 w-3.5" />

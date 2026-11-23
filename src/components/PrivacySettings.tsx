@@ -1,3 +1,4 @@
+import { removeAllMyAttachmentFiles } from '@/lib/db';
 import { useCallback, useEffect, useState } from 'react';
 import { Download, Loader2, ShieldCheck, Trash2 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
@@ -175,6 +176,15 @@ export function PrivacySettings({ onExportData, onAccountDeleted, onChangePasswo
   const doDelete = async () => {
     setDeleting(true);
     setDataError(null);
+    // Stored attachment files are not covered by the account deletion itself, so remove them first.
+    try {
+      const { data: u } = await supabase.auth.getUser();
+      if (u.user) await removeAllMyAttachmentFiles(u.user.id);
+    } catch (e) {
+      setDataError(e instanceof Error ? e.message : 'Could not remove your stored files');
+      setDeleting(false);
+      return;
+    }
     const { error } = await supabase.rpc('delete_my_account');
     if (error) {
       setDataError(error.message);

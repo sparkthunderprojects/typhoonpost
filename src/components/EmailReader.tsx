@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { Reply, Paperclip, Clock, MailOpen } from 'lucide-react';
-import type { Email, Contact } from '@/types';
+import type { Email, Contact, Attachment } from '@/types';
 import { LABEL_DEFS } from '@/types';
 import { Avatar } from '@/components/Avatar';
 import { AttachmentIcon } from '@/components/AttachmentIcon';
@@ -12,6 +12,8 @@ interface EmailReaderProps {
   onReply: () => void;
   contacts: Contact[];
   onAddToContacts: (email: Email) => void;
+  onDownloadAttachment: (att: Attachment) => void;
+  onEditDraft: (email: Email) => void;
 }
 
 export function EmailReader({
@@ -19,6 +21,8 @@ export function EmailReader({
   onReply,
   contacts,
   onAddToContacts,
+  onDownloadAttachment,
+  onEditDraft,
 }: EmailReaderProps) {
   return (
     <section className="flex h-full w-[42%] min-w-[380px] max-w-[640px] flex-1 flex-col bg-bg-subtle">
@@ -102,9 +106,13 @@ export function EmailReader({
                     </div>
                     <div className="grid grid-cols-2 gap-2">
                       {email.attachments.map((att) => (
-                        <div
+                        <button
                           key={att.id}
-                          className="flex items-center gap-3 rounded-xl border border-line bg-bg p-3 transition-colors hover:border-line-strong hover:bg-bg-muted"
+                          type="button"
+                          disabled={!att.file}
+                          onClick={() => onDownloadAttachment(att)}
+                          title={att.file ? `Download ${att.name}` : 'The file itself was not stored'}
+                          className="flex items-center gap-3 rounded-xl border border-line bg-bg p-3 text-left transition-colors hover:border-line-strong hover:bg-bg-muted disabled:cursor-default"
                         >
                           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-bg-muted">
                             <AttachmentIcon kind={att.kind} className="h-4 w-4" />
@@ -113,7 +121,7 @@ export function EmailReader({
                             <p className="truncate text-xs font-medium text-fg">{att.name}</p>
                             <p className="text-2xs text-fg-subtle">{att.size}</p>
                           </div>
-                        </div>
+                        </button>
                       ))}
                     </div>
                   </div>
@@ -123,13 +131,23 @@ export function EmailReader({
 
             {/* Reply bar */}
             <div className="border-t border-line p-3">
-              <button
-                onClick={onReply}
-                className="flex w-full items-center gap-2 rounded-xl border border-line bg-bg px-4 py-2.5 text-left text-sm text-fg-subtle transition-colors hover:border-accent hover:bg-accent-soft/40"
-              >
-                <Reply className="h-4 w-4" />
-                Reply to {email.sender}…
-              </button>
+              {email.folder === 'drafts' ? (
+                <button
+                  onClick={() => onEditDraft(email)}
+                  className="flex w-full items-center gap-2 rounded-xl border border-line bg-bg px-4 py-2.5 text-left text-sm text-fg transition-colors hover:border-accent hover:bg-accent-soft/40"
+                >
+                  <Reply className="h-4 w-4" />
+                  Continue editing this draft
+                </button>
+              ) : (
+                <button
+                  onClick={onReply}
+                  className="flex w-full items-center gap-2 rounded-xl border border-line bg-bg px-4 py-2.5 text-left text-sm text-fg-subtle transition-colors hover:border-accent hover:bg-accent-soft/40"
+                >
+                  <Reply className="h-4 w-4" />
+                  Reply to {email.sender}…
+                </button>
+              )}
             </div>
           </motion.div>
         ) : (

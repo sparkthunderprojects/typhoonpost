@@ -1,10 +1,11 @@
 import { supabase } from '@/lib/supabase';
-import { decryptMessage, encryptMessage } from '@/lib/crypto/envelope';
+import { decryptMessage, encryptMessage, type PayloadAttachment } from '@/lib/crypto/envelope';
+import { decryptFile, decryptRecord, encryptFile, encryptRecord, type EncryptedRecord } from '@/lib/crypto/record';
 import { openAttestation } from '@/lib/crypto/attest';
-import { fromBase64 } from '@/lib/crypto/bytes';
+import { fromBase64, toBase64 } from '@/lib/crypto/bytes';
 import { publicKeyOf } from '@/lib/crypto/keys';
 import { getPrivateKey } from '@/lib/crypto/keyStore';
-import type { Attachment, CalendarEvent, Contact, ContactGroup, Email, FolderId, LabelId, Category } from '@/types';
+import type { Attachment, CalendarEvent, Contact, ContactGroup, Email, FolderId, LabelId, Category, Task } from '@/types';
 import { initialEmails } from '@/data/mockEmails';
 import { initialContacts } from '@/data/mockContacts';
 
@@ -43,6 +44,7 @@ interface AttachmentRow {
   size: string;
   kind: string;
   url: string | null;
+  file?: PayloadAttachment['file'];
 }
 
 interface ContactRow {
@@ -59,7 +61,12 @@ interface ContactRow {
   starred: boolean;
   frequent: boolean;
   created_at: string;
+  enc_version?: number | null;
+  enc_payload?: string | null;
+  enc_key?: string | null;
 }
+
+type ContactPayload = Omit<Contact, 'id' | 'createdAt'>;
 
 function initialsOf(name: string): string {
   return (
@@ -118,6 +125,7 @@ function openRow(row: EmailRow): EmailRow {
         size: a.size,
         kind: a.kind,
         url: null,
+        file: a.file,
       })),
     };
   } catch {
@@ -157,6 +165,7 @@ function rowToEmail(input: EmailRow): Email {
         size: a.size,
         kind: a.kind as Attachment['kind'],
         url: a.url ?? undefined,
+        file: a.file,
       }),
     ),
     hasReplies: row.has_replies,
@@ -166,22 +175,55 @@ function rowToEmail(input: EmailRow): Email {
   };
 }
 
+const contactCache = new Map<string, Contact>();
+
 function rowToContact(row: ContactRow): Contact {
-  return {
-    id: row.id,
-    firstName: row.first_name,
-    lastName: row.last_name,
-    email: row.email,
-    phone: row.phone,
-    jobTitle: row.job_title,
-    company: row.company,
-    avatarColor: row.avatar_color,
-    notes: row.notes,
-    groups: (row.groups || []) as ContactGroup[],
-    starred: row.starred,
-    frequent: row.frequent,
-    createdAt: row.created_at.slice(0, 10),
-  };
+  const createdAt = row.created_at.slice(0, 10);
+  let c: Contact;
+  if (row.enc_version != null && row.enc_payload && row.enc_key) {
+    try {
+      const key = getPrivateKey();
+      if (!key) throw new Error('locked');
+      const p = openRecord<ContactPayload>('contact', row, key);
+      c = { ...p, id: row.id, createdAt };
+    } catch {
+      c = {
+        id: row.id, firstName: 'Unreadable', lastName: 'contact', email: '', phone: '', jobTitle: '', company: '',
+        avatarColor: '#94a3b8', notes: '', groups: [], starred: false, frequent: false, createdAt,
+      };
+    }
+  } else {
+    c = {
+      id: row.id,
+      firstName: row.first_name,
+      lastName: row.last_name,
+      email: row.email,
+      phone: row.phone,
+      jobTitle: row.job_title,
+      company: row.company,
+      avatarColor: row.avatar_color,
+      notes: row.notes,
+      groups: (row.groups || []) as ContactGroup[],
+      starred: row.starred,
+      frequent: row.frequent,
+      createdAt,
+    };
+  }
+  contactCache.set(c.id, c);
+  return c;
+}
+
+function openRecord<T>(
+  kind: 'contact' | 'event' | 'task',
+  row: { enc_version?: number | null; enc_payload?: string | null; enc_key?: string | null },
+  key: Uint8Array,
+): T {
+  return decryptRecord<T>(kind, { version: row.enc_version!, payload: row.enc_payload!, key: row.enc_key! }, key);
+}
+
+function sealRecord(kind: 'contact' | 'event' | 'task', value: unknown) {
+  const enc: EncryptedRecord = encryptRecord(kind, value, ownPublicKey());
+  return { enc_version: enc.version, enc_payload: enc.payload, enc_key: enc.key };
 }
 
 // ---------------------------------------------------------------------------
@@ -226,7 +268,9 @@ export async function saveSignature(userId: string, signature: string): Promise<
 // Emails: create / update
 // ---------------------------------------------------------------------------
 
-type NewEmail = Omit<Email, 'id' | 'timestamp' | 'date' | 'initials' | 'attachments' | 'createdAt'>;
+type NewEmail = Omit<Email, 'id' | 'timestamp' | 'date' | 'initials' | 'attachments' | 'createdAt'> & {
+  payloadAttachments?: PayloadAttachment[];
+};
 
 /** The readable columns stay empty; everything describing the message goes into the envelope. */
 function encryptedEmailRow(userId: string, email: NewEmail, recipientPublicKey: Uint8Array) {
@@ -241,7 +285,7 @@ function encryptedEmailRow(userId: string, email: NewEmail, recipientPublicKey: 
       category: email.category as 'primary' | 'promotions',
       to: email.toAddresses ?? [],
       cc: [],
-      attachments: [],
+      attachments: email.payloadAttachments ?? [],
     },
     recipientPublicKey,
   );
@@ -312,43 +356,42 @@ export async function insertContact(
   userId: string,
   c: Omit<Contact, 'id' | 'createdAt'>,
 ): Promise<Contact> {
+  const payload: ContactPayload = pickContact(c);
   const { data, error } = await supabase
     .from('contacts')
-    .insert({
-      user_id: userId,
-      first_name: c.firstName,
-      last_name: c.lastName,
-      email: c.email,
-      phone: c.phone,
-      job_title: c.jobTitle,
-      company: c.company,
-      avatar_color: c.avatarColor,
-      notes: c.notes,
-      groups: c.groups,
-      starred: c.starred,
-      frequent: c.frequent,
-    })
+    .insert({ user_id: userId, ...sealRecord('contact', payload) })
     .select('*')
     .single();
   if (error) throw error;
   return rowToContact(data as ContactRow);
 }
 
+function pickContact(c: ContactPayload): ContactPayload {
+  return {
+    firstName: c.firstName, lastName: c.lastName, email: c.email, phone: c.phone, jobTitle: c.jobTitle,
+    company: c.company, avatarColor: c.avatarColor, notes: c.notes, groups: c.groups, starred: c.starred,
+    frequent: c.frequent,
+  };
+}
+
+/**
+ * Saves the whole contact again, encrypted. A contact that was stored in the clear before
+ * encryption existed is moved to the encrypted form the first time it is edited.
+ */
 export async function updateContact(id: string, c: Partial<Omit<Contact, 'id' | 'createdAt'>>): Promise<void> {
-  const dbPatch: Record<string, unknown> = {};
-  if (c.firstName !== undefined) dbPatch.first_name = c.firstName;
-  if (c.lastName !== undefined) dbPatch.last_name = c.lastName;
-  if (c.email !== undefined) dbPatch.email = c.email;
-  if (c.phone !== undefined) dbPatch.phone = c.phone;
-  if (c.jobTitle !== undefined) dbPatch.job_title = c.jobTitle;
-  if (c.company !== undefined) dbPatch.company = c.company;
-  if (c.avatarColor !== undefined) dbPatch.avatar_color = c.avatarColor;
-  if (c.notes !== undefined) dbPatch.notes = c.notes;
-  if (c.groups !== undefined) dbPatch.groups = c.groups;
-  if (c.starred !== undefined) dbPatch.starred = c.starred;
-  if (c.frequent !== undefined) dbPatch.frequent = c.frequent;
-  const { error } = await supabase.from('contacts').update(dbPatch).eq('id', id);
+  const current = contactCache.get(id);
+  if (!current) throw new Error('Contact not loaded');
+  const next = { ...current, ...c };
+  const { error } = await supabase
+    .from('contacts')
+    .update({
+      ...sealRecord('contact', pickContact(next)),
+      first_name: '', last_name: '', email: '', phone: '', job_title: '', company: '', notes: '', groups: [],
+      starred: false, frequent: false,
+    })
+    .eq('id', id);
   if (error) throw error;
+  contactCache.set(id, next);
 }
 
 export async function deleteContactRow(id: string): Promise<void> {
@@ -374,20 +417,33 @@ interface EventRow {
   title: string;
   description: string;
   location: string;
-  start_time: string;
-  end_time: string;
+  start_time: string | null;
+  end_time: string | null;
   all_day: boolean;
   color: string;
+  enc_version?: number | null;
+  enc_payload?: string | null;
+  enc_key?: string | null;
 }
 
 function rowToEvent(row: EventRow): CalendarEvent {
+  if (row.enc_version != null && row.enc_payload && row.enc_key) {
+    try {
+      const key = getPrivateKey();
+      if (!key) throw new Error('locked');
+      return { ...openRecord<Omit<CalendarEvent, 'id'>>('event', row, key), id: row.id };
+    } catch {
+      const now = new Date().toISOString();
+      return { id: row.id, title: 'Unreadable event', description: '', location: '', start: now, end: now, allDay: true, color: '#94a3b8' };
+    }
+  }
   return {
     id: row.id,
     title: row.title,
     description: row.description,
     location: row.location,
-    start: row.start_time,
-    end: row.end_time,
+    start: row.start_time ?? new Date().toISOString(),
+    end: row.end_time ?? new Date().toISOString(),
     allDay: row.all_day,
     color: row.color,
   };
@@ -396,10 +452,13 @@ function rowToEvent(row: EventRow): CalendarEvent {
 export async function fetchEventsForUser(): Promise<CalendarEvent[]> {
   const { data, error } = await supabase
     .from('events')
-    .select('*')
-    .order('start_time', { ascending: true });
+    .select('*');
   if (error) throw error;
-  return (data as EventRow[]).map(rowToEvent);
+  return (data as EventRow[]).map(rowToEvent).sort((a, b) => a.start.localeCompare(b.start));
+}
+
+function eventPayload(e: Omit<CalendarEvent, 'id'>): Omit<CalendarEvent, 'id'> {
+  return { title: e.title, description: e.description, location: e.location, start: e.start, end: e.end, allDay: e.allDay, color: e.color };
 }
 
 export async function insertEvent(
@@ -408,16 +467,7 @@ export async function insertEvent(
 ): Promise<CalendarEvent> {
   const { data, error } = await supabase
     .from('events')
-    .insert({
-      user_id: userId,
-      title: e.title,
-      description: e.description,
-      location: e.location,
-      start_time: e.start,
-      end_time: e.end,
-      all_day: e.allDay,
-      color: e.color,
-    })
+    .insert({ user_id: userId, start_time: null, end_time: null, ...sealRecord('event', eventPayload(e)) })
     .select('*')
     .single();
   if (error) throw error;
@@ -428,13 +478,8 @@ export async function updateEvent(id: string, e: Omit<CalendarEvent, 'id'>): Pro
   const { error } = await supabase
     .from('events')
     .update({
-      title: e.title,
-      description: e.description,
-      location: e.location,
-      start_time: e.start,
-      end_time: e.end,
-      all_day: e.allDay,
-      color: e.color,
+      ...sealRecord('event', eventPayload(e)),
+      title: '', description: '', location: '', start_time: null, end_time: null, all_day: false,
     })
     .eq('id', id);
   if (error) throw error;
@@ -464,17 +509,7 @@ export async function seedAccountIfEmpty(userId: string): Promise<void> {
 
   const contactRows = initialContacts.map((c) => ({
     user_id: userId,
-    first_name: c.firstName,
-    last_name: c.lastName,
-    email: c.email,
-    phone: c.phone,
-    job_title: c.jobTitle,
-    company: c.company,
-    avatar_color: c.avatarColor,
-    notes: c.notes,
-    groups: c.groups,
-    starred: c.starred,
-    frequent: c.frequent,
+    ...sealRecord('contact', pickContact(c)),
   }));
   const { error: contactErr } = await supabase.from('contacts').insert(contactRows);
   if (contactErr) throw contactErr;
@@ -530,6 +565,7 @@ export interface LocalDelivery {
   payload: string;
   key: string;
   size: number;
+  files?: string[];
 }
 
 export interface LocalDeliveryResult {
@@ -589,4 +625,171 @@ export async function claimAddress(handle: string): Promise<string> {
   const { data, error } = await supabase.rpc('claim_mailbox', { handle });
   if (error) throw new Error(error.message);
   return data as string;
+}
+
+// ---------------------------------------------------------------------------
+// Drafts: saved encrypted to the owner's own key, like any other message
+// ---------------------------------------------------------------------------
+
+export interface DraftInput {
+  to: string;
+  subject: string;
+  body: string;
+  payloadAttachments?: PayloadAttachment[];
+}
+
+export async function saveDraft(userId: string, existingId: string | null, d: DraftInput): Promise<Email> {
+  const recipients = d.to.split(/[,;]/).map((x) => x.trim().toLowerCase()).filter(Boolean);
+  const row = encryptedEmailRow(
+    userId,
+    {
+      sender: 'Draft',
+      senderEmail: '',
+      avatarColor: '#94a3b8',
+      subject: d.subject,
+      preview: d.body.replace(/<[^>]+>/g, '').slice(0, 120) || '(no content)',
+      body: d.body,
+      read: true,
+      starred: false,
+      folder: 'drafts',
+      labels: [],
+      category: 'primary',
+      toAddresses: recipients,
+      payloadAttachments: d.payloadAttachments,
+    },
+    ownPublicKey(),
+  );
+  const q = existingId
+    ? supabase.from('emails').update(row).eq('id', existingId)
+    : supabase.from('emails').insert(row);
+  const { data, error } = await q.select('*, attachments(*)').single();
+  if (error) throw error;
+  return rowToEmail(data as EmailRow);
+}
+
+export async function deleteEmailRow(id: string): Promise<void> {
+  const { error } = await supabase.from('emails').delete().eq('id', id);
+  if (error) throw error;
+}
+
+// ---------------------------------------------------------------------------
+// Attachment files: encrypted in the browser, stored as ciphertext
+// ---------------------------------------------------------------------------
+
+export const MAX_FILE_BYTES = 10 * 1024 * 1024;
+export const MAX_TOTAL_BYTES = 25 * 1024 * 1024;
+
+function humanSize(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function kindOf(f: { name: string; type: string }): PayloadAttachment['kind'] {
+  const n = f.name.toLowerCase();
+  if (f.type.startsWith('image/')) return 'image';
+  if (n.endsWith('.pdf')) return 'pdf';
+  if (/\.(pptx?|key)$/.test(n)) return 'slide';
+  if (/\.(xlsx?|csv|numbers)$/.test(n)) return 'sheet';
+  return 'doc';
+}
+
+export async function uploadAttachment(userId: string, file: File): Promise<PayloadAttachment> {
+  if (file.size > MAX_FILE_BYTES) throw new Error(`${file.name} is larger than ${humanSize(MAX_FILE_BYTES)}`);
+  const { blob, key } = encryptFile(new Uint8Array(await file.arrayBuffer()));
+  const id = crypto.randomUUID();
+  const { error } = await supabase.storage
+    .from('attachments')
+    .upload(`${userId}/${id}`, blob, { contentType: 'application/octet-stream', upsert: false });
+  if (error) throw error;
+  return {
+    name: file.name,
+    size: humanSize(file.size),
+    kind: kindOf(file),
+    file: { id, key: toBase64(key), mime: file.type || 'application/octet-stream', bytes: file.size },
+  };
+}
+
+export async function downloadAttachment(userId: string, att: Attachment): Promise<Blob> {
+  if (!att.file) throw new Error('This attachment has no stored file');
+  const { data, error } = await supabase.storage.from('attachments').download(`${userId}/${att.file.id}`);
+  if (error || !data) throw error ?? new Error('Could not download the file');
+  const plain = decryptFile(new Uint8Array(await data.arrayBuffer()), fromBase64(att.file.key));
+  return new Blob([plain as BlobPart], { type: att.file.mime });
+}
+
+export async function removeAttachmentFiles(userId: string, fileIds: string[]): Promise<void> {
+  if (!fileIds.length) return;
+  await supabase.storage.from('attachments').remove(fileIds.map((id) => `${userId}/${id}`));
+}
+
+/** Used before account deletion so no ciphertext is left behind in storage. */
+export async function removeAllMyAttachmentFiles(userId: string): Promise<void> {
+  for (;;) {
+    const { data, error } = await supabase.storage.from('attachments').list(userId, { limit: 100 });
+    if (error) throw error;
+    if (!data?.length) return;
+    const { error: rmErr } = await supabase.storage.from('attachments').remove(data.map((f) => `${userId}/${f.name}`));
+    if (rmErr) throw rmErr;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tasks: encrypted from the start
+// ---------------------------------------------------------------------------
+
+interface TaskRow {
+  id: string;
+  enc_version: number;
+  enc_payload: string;
+  enc_key: string;
+  created_at: string;
+}
+
+type TaskPayload = Omit<Task, 'id' | 'createdAt'>;
+
+function pickTask(t: TaskPayload): TaskPayload {
+  return { title: t.title, notes: t.notes, due: t.due, important: t.important, done: t.done, completedAt: t.completedAt };
+}
+
+function rowToTask(row: TaskRow): Task {
+  try {
+    const key = getPrivateKey();
+    if (!key) throw new Error('locked');
+    return { ...openRecord<TaskPayload>('task', row, key), id: row.id, createdAt: row.created_at };
+  } catch {
+    return {
+      id: row.id, title: 'This task could not be decrypted', notes: '', due: null, important: false, done: false,
+      completedAt: null, createdAt: row.created_at,
+    };
+  }
+}
+
+export async function fetchTasksForUser(): Promise<Task[]> {
+  const { data, error } = await supabase.from('tasks').select('*').order('created_at', { ascending: false });
+  if (error) throw error;
+  return (data as TaskRow[]).map(rowToTask);
+}
+
+export async function insertTask(userId: string, t: TaskPayload): Promise<Task> {
+  const { data, error } = await supabase
+    .from('tasks')
+    .insert({ user_id: userId, ...sealRecord('task', pickTask(t)) })
+    .select('*')
+    .single();
+  if (error) throw error;
+  return rowToTask(data as TaskRow);
+}
+
+export async function updateTask(id: string, t: TaskPayload): Promise<void> {
+  const { error } = await supabase
+    .from('tasks')
+    .update({ ...sealRecord('task', pickTask(t)), updated_at: new Date().toISOString() })
+    .eq('id', id);
+  if (error) throw error;
+}
+
+export async function deleteTaskRow(id: string): Promise<void> {
+  const { error } = await supabase.from('tasks').delete().eq('id', id);
+  if (error) throw error;
 }

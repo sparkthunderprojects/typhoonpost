@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Loader2,
   Inbox,
@@ -20,8 +20,9 @@ import {
   CalendarPlus,
   UserPlus,
   Tag,
+  CheckSquare,
 } from 'lucide-react';
-import type { Email, FolderId, LabelId, FilterTab, Category, AppView, Contact, ContactGroup, CalendarEvent } from '@/types';
+import type { Email, FolderId, LabelId, FilterTab, Category, AppView, Contact, ContactGroup, CalendarEvent, Task, Attachment } from '@/types';
 import { FOLDER_NAMES, LABEL_DEFS, contactName } from '@/types';
 import { useTheme } from '@/hooks/useTheme';
 import { useToasts } from '@/hooks/useToasts';
@@ -47,7 +48,19 @@ import {
   insertEvent as insertEventDb,
   updateEvent as updateEventDb,
   deleteEventRow,
+  fetchTasksForUser,
+  insertTask,
+  updateTask as updateTaskDb,
+  deleteTaskRow,
+  saveDraft,
+  deleteEmailRow,
+  uploadAttachment,
+  removeAttachmentFiles,
+  downloadAttachment,
 } from '@/lib/db';
+import { contactMatches, emailMatches, eventMatches, filterBy } from '@/lib/search';
+import { TasksView } from '@/components/TasksView';
+import type { PayloadAttachment } from '@/lib/crypto/envelope';
 import { AuthScreen } from '@/components/AuthScreen';
 import { sendMessage } from '@/lib/outgoing';
 import { RecoveryKeyScreen, UnlockScreen } from '@/components/KeyScreens';
@@ -114,6 +127,11 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
   const [newEventStart, setNewEventStart] = useState<string | undefined>(undefined);
 
+  // ---- Tasks and calendar search ----
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [taskQuery, setTaskQuery] = useState('');
+  const [eventQuery, setEventQuery] = useState('');
+
   // ---- Contacts state ----
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [activeContactGroup, setActiveContactGroup] = useState<ContactGroup>('all');
@@ -139,17 +157,19 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
       setDataError(null);
       try {
         await seedAccountIfEmpty(userId);
-        const [loadedEmails, loadedContacts, loadedSignature, loadedEvents] = await Promise.all([
+        const [loadedEmails, loadedContacts, loadedSignature, loadedEvents, loadedTasks] = await Promise.all([
           fetchEmailsForUser(),
           fetchContactsForUser(),
           fetchSignature(userId),
           fetchEventsForUser(),
+          fetchTasksForUser(),
         ]);
         if (cancelled) return;
         setEmails(loadedEmails);
         setContacts(loadedContacts);
         setSignatureState(loadedSignature);
         setEvents(loadedEvents);
+        setTasks(loadedTasks);
         setActiveId(loadedEmails.find((e) => e.folder === 'inbox')?.id ?? loadedEmails[0]?.id ?? null);
       } catch (err) {
         if (cancelled) return;
@@ -203,15 +223,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
     }
     if (filter === 'unread') list = list.filter((e) => !e.read);
     if (filter === 'starred') list = list.filter((e) => e.starred);
-    if (query.trim()) {
-      const q = query.toLowerCase();
-      list = list.filter(
-        (e) =>
-          e.sender.toLowerCase().includes(q) ||
-          e.subject.toLowerCase().includes(q) ||
-          e.preview.toLowerCase().includes(q),
-      );
-    }
+    list = filterBy(list, query, emailMatches);
     return list;
   }, [emails, activeFolder, activeLabel, category, filter, query]);
 
@@ -254,15 +266,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
     if (activeContactGroup === 'starred') list = list.filter((c) => c.starred);
     else if (activeContactGroup === 'frequent') list = list.filter((c) => c.frequent);
     else if (activeContactGroup !== 'all') list = list.filter((c) => c.groups.includes(activeContactGroup));
-    if (contactQuery.trim()) {
-      const q = contactQuery.toLowerCase();
-      list = list.filter(
-        (c) =>
-          contactName(c).toLowerCase().includes(q) ||
-          c.email.toLowerCase().includes(q) ||
-          c.company.toLowerCase().includes(q),
-      );
-    }
+    list = filterBy(list, contactQuery, contactMatches);
     return list;
   }, [contacts, activeContactGroup, contactQuery]);
 
@@ -655,15 +659,65 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
   );
   const restoreComposer = useCallback(() => setComposerState('open'), []);
 
+  // ---- Drafts: saved encrypted as you type, one row per draft ----
+  const draftIdRef = useRef<string | null>(null);
+  const draftQueue = useRef<Promise<void>>(Promise.resolve());
+  const [composerSession, setComposerSession] = useState(0);
+  const [composerPrefillBody, setComposerPrefillBody] = useState<string | undefined>(undefined);
+  const [composerPrefillAttachments, setComposerPrefillAttachments] = useState<PayloadAttachment[] | undefined>(undefined);
+
+  const autosaveDraft = useCallback(
+    (to: string, subject: string, body: string, attachments: PayloadAttachment[]) => {
+      // Saves run one after another so a quick second save updates the first draft instead of
+      // creating another.
+      draftQueue.current = draftQueue.current.then(async () => {
+        try {
+          const saved = await saveDraft(userId, draftIdRef.current, { to, subject, body, payloadAttachments: attachments });
+          draftIdRef.current = saved.id;
+          setEmails((prev) => (prev.some((e) => e.id === saved.id) ? prev.map((e) => (e.id === saved.id ? saved : e)) : [saved, ...prev]));
+        } catch {
+          /* the next change tries again */
+        }
+      });
+    },
+    [userId],
+  );
+
+  /** Removes the saved draft once the message was sent or thrown away. */
+  const finishDraft = useCallback(() => {
+    draftQueue.current = draftQueue.current.then(async () => {
+      const id = draftIdRef.current;
+      draftIdRef.current = null;
+      if (!id) return;
+      await deleteEmailRow(id).catch(() => {});
+      setEmails((prev) => prev.filter((e) => e.id !== id));
+    });
+  }, []);
+
+  const openDraft = useCallback((email: Email) => {
+    draftIdRef.current = email.id;
+    setComposerPrefillTo(
+      (email.toAddresses ?? []).map((addr) => ({ id: addr, name: addr, email: addr, color: '#94a3b8' })),
+    );
+    setComposerPrefillSubject(email.subject);
+    setComposerPrefillBody(email.body);
+    setComposerPrefillAttachments(
+      email.attachments.map((a) => ({ name: a.name, size: a.size, kind: a.kind, file: a.file })),
+    );
+    setComposerSession((n) => n + 1);
+    setComposerState('open');
+  }, []);
+
   const sendEmail = useCallback(
-    async (to: string, subject: string, body: string) => {
+    async (to: string, subject: string, body: string, attachments: PayloadAttachment[]) => {
       let outcome: Awaited<ReturnType<typeof sendMessage>>;
       try {
-        outcome = await sendMessage({ userId, myAddress: myAddress ?? userEmail, to, subject, body });
+        outcome = await sendMessage({ userId, myAddress: myAddress ?? userEmail, to, subject, body, attachments });
       } catch {
         push('Failed to save sent email');
         return;
       }
+      finishDraft();
       const { saved, failed } = outcome;
       setEmails((prev) => [saved, ...prev]);
 
@@ -679,17 +733,68 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
         push(`Saved to Sent Items, but not delivered to ${list}`);
       }
     },
-    [push, userId, userEmail, myAddress],
-  );
-
-  const autosaveDraft = useCallback(
-    (_to: string, _subject: string, _body: string) => {},
-    [],
+    [push, userId, userEmail, myAddress, finishDraft],
   );
 
   const discardDraft = useCallback(() => {
+    finishDraft();
     push('Draft discarded');
-  }, [push]);
+  }, [push, finishDraft]);
+
+  const uploadFile = useCallback((file: File) => uploadAttachment(userId, file), [userId]);
+  const removeFile = useCallback((id: string) => void removeAttachmentFiles(userId, [id]).catch(() => {}), [userId]);
+
+  const downloadFile = useCallback(
+    async (att: Attachment) => {
+      try {
+        const blob = await downloadAttachment(userId, att);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = att.name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch {
+        push(`Could not download ${att.name}`);
+      }
+    },
+    [userId, push],
+  );
+
+  // ---- Tasks ----
+  const addTask = useCallback(
+    (title: string, opts: { due: string | null; important: boolean }) => {
+      insertTask(userId, { title, notes: '', due: opts.due, important: opts.important, done: false, completedAt: null })
+        .then((t) => setTasks((prev) => [t, ...prev]))
+        .catch(() => push('Failed to add task'));
+    },
+    [userId, push],
+  );
+
+  const updateTaskItem = useCallback(
+    (task: Task) => {
+      setTasks((prev) => prev.map((t) => (t.id === task.id ? task : t)));
+      updateTaskDb(task.id, task).catch(() => push('Failed to save task'));
+    },
+    [push],
+  );
+
+  const deleteTask = useCallback(
+    (id: string) => {
+      const t = tasks.find((x) => x.id === id);
+      if (!t) return;
+      setTasks((prev) => prev.filter((x) => x.id !== id));
+      deleteTaskRow(id).catch(() => {});
+      push('Task deleted', 'Undo', () => {
+        insertTask(userId, t)
+          .then((restored) => setTasks((prev) => [restored, ...prev]))
+          .catch(() => push('Failed to restore task'));
+      });
+    },
+    [tasks, push, userId],
+  );
 
   // ---- Keyboard shortcuts ----
   useEffect(() => {
@@ -787,6 +892,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
       emails,
       contacts,
       events,
+      tasks,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -803,6 +909,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
   const paletteCommands: PaletteCommand[] = [
     { id: 'new-mail', group: 'Actions', label: 'New mail', Icon: PenSquare, shortcut: 'C', run: openComposer },
     { id: 'new-event', group: 'Actions', label: 'New calendar event', Icon: CalendarPlus, run: () => { setView('calendar'); openNewEvent(new Date().toISOString()); } },
+    { id: 'new-task', group: 'Actions', label: 'New task', Icon: CheckSquare, run: () => handleViewChange('tasks') },
     { id: 'new-contact', group: 'Actions', label: 'New contact', Icon: UserPlus, run: () => { setView('contacts'); setEditingContact(null); setContactFormOpen(true); } },
     ...(['inbox', 'sent', 'drafts', 'trash', 'spam', 'archive', 'snoozed', 'starred'] as FolderId[]).map((f) => ({
       id: `go-${f}`,
@@ -814,6 +921,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
     ...LABEL_DEFS.map((l) => ({ id: `cat-${l.id}`, group: 'Categories', label: l.name, Icon: Tag, keywords: 'category label', run: () => handleLabelToggle(l.id) })),
     { id: 'view-mail', group: 'Switch app', label: 'Mail', Icon: Mail, run: () => handleViewChange('mail') },
     { id: 'view-calendar', group: 'Switch app', label: 'Calendar', Icon: CalendarDays, run: () => handleViewChange('calendar') },
+    { id: 'view-tasks', group: 'Switch app', label: 'Tasks', Icon: CheckSquare, keywords: 'to do todo', run: () => handleViewChange('tasks') },
     { id: 'view-people', group: 'Switch app', label: 'People', Icon: Users, keywords: 'contacts', run: () => handleViewChange('contacts') },
     { id: 'theme', group: 'Preferences', label: theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode', Icon: Moon, keywords: 'theme appearance', run: toggle },
     { id: 'settings', group: 'Preferences', label: 'Settings', Icon: SettingsIcon, keywords: 'signature address', run: () => setSettingsOpen(true) },
@@ -853,10 +961,12 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-bg text-fg">
       <TopBar
-        searchValue={view === 'contacts' ? contactQuery : query}
-        onSearchChange={view === 'contacts' ? setContactQuery : setQuery}
-        searchPlaceholder={view === 'contacts' ? 'Search people' : view === 'calendar' ? 'Search' : 'Search mail'}
-        searchDisabled={view === 'calendar'}
+        searchValue={view === 'contacts' ? contactQuery : view === 'tasks' ? taskQuery : view === 'calendar' ? eventQuery : query}
+        onSearchChange={view === 'contacts' ? setContactQuery : view === 'tasks' ? setTaskQuery : view === 'calendar' ? setEventQuery : setQuery}
+        searchPlaceholder={
+          view === 'contacts' ? 'Search people' : view === 'tasks' ? 'Search tasks' : view === 'calendar' ? 'Search events' : 'Search mail'
+        }
+        searchDisabled={false}
         theme={theme}
         onToggleTheme={toggle}
         onOpenSettings={() => setSettingsOpen(true)}
@@ -878,6 +988,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
         userEmail={userEmail}
         contactCount={contacts.length}
         eventCount={events.length}
+        taskCount={tasks.filter((t) => !t.done).length}
       />
 
       <main className="flex min-w-0 flex-1 flex-col">
@@ -932,10 +1043,14 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
             onReply={() => activeEmail && openComposerReply(activeEmail)}
             contacts={contacts}
             onAddToContacts={addSenderToContacts}
+            onDownloadAttachment={downloadFile}
+            onEditDraft={openDraft}
           />
         </>
+      ) : view === 'tasks' ? (
+        <TasksView tasks={tasks} query={taskQuery} onAdd={addTask} onUpdate={updateTaskItem} onDelete={deleteTask} />
       ) : view === 'calendar' ? (
-        <CalendarView events={events} onCreate={openNewEvent} onOpenEvent={openEditEvent} />
+        <CalendarView events={filterBy(events, eventQuery, eventMatches)} onCreate={openNewEvent} onOpenEvent={openEditEvent} />
       ) : (
         <ContactsView
           contacts={visibleContacts}
@@ -980,8 +1095,14 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
         onSend={sendEmail}
         onDiscard={discardDraft}
         onAutosave={autosaveDraft}
+        onUploadFile={uploadFile}
+        onRemoveFile={removeFile}
+        onError={push}
         prefillTo={composerPrefillTo}
         prefillSubject={composerPrefillSubject}
+        prefillBody={composerPrefillBody}
+        prefillAttachments={composerPrefillAttachments}
+        sessionId={composerSession}
         signature={signature}
         contacts={contacts}
       />

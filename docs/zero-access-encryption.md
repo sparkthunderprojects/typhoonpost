@@ -1,6 +1,6 @@
 # Zero-access encryption: Stage 0 spec
 
-Status: Stages 1 (key infrastructure), 2 (encrypted inbound) and 3 (write paths) are built and tested. Stages 4 and 5 are not started.
+Status: Stages 1 to 4 (keys, encrypted inbound, write paths, contacts/events/tasks/drafts/attachments/search) are built and tested. Stage 5 (migrate old data, remove plaintext, harden) is not started.
 
 ## 1. The claim
 
@@ -12,7 +12,7 @@ Stored mail, contacts and events are ciphertext. Keys are created in the user's 
 - **Browser-delivered code must be trusted.** A compromised server could ship malicious JavaScript. Mitigations: strict CSP, no third-party scripts, pinned dependencies, open-source client. Not eliminated.
 - **Metadata that stays readable:** timestamps, folder, read and flag state, size, and the account a message belongs to.
 
-The public website must not use the words "zero-access" until Stage 4 ships, and must repeat these limits when it does.
+The public website must not use the words "zero-access" until Stage 5 has migrated existing data and removed the plaintext columns, and must repeat these limits when it does.
 
 ## 2. Decisions
 
@@ -90,6 +90,22 @@ Table `user_keys`: `user_id`, `public_key`, `wrapped_by_password`, `wrapped_by_r
 - Drafts are not persisted today (autosave is a no-op), so there is nothing to encrypt yet. Encrypted drafts come with Stage 4.
 - Tests: Deno handler tests, vitest end-to-end tests that run the real delivery handler (Alice to Bob, spoofing, tampering), and a browser test of the send flow with a mocked server (sent copy and delivery requests hold no readable content, local and external recipients are routed separately, lookup failure sends nothing). Live Supabase and Resend paths were not exercised from the development sandbox.
 
+### Stage 4 as built
+
+- **Contacts and events** are stored as one encrypted record each (`src/lib/crypto/record.ts`: random content key per record, sealed to the owner's key, record kind bound in as associated data so a contact ciphertext cannot be opened as a task). New rows keep every readable column at its empty default. Event start and end times are kept inside the record too, so the server cannot see when someone has something on. Old plaintext rows still display and are re-saved encrypted the first time they are edited; the rest wait for Stage 5.
+- **Tasks** are a new feature, encrypted from the first row (`tasks` table: owner, ids and timestamps are the only readable columns). View with My Day, Important, Planned, Tasks and Completed lists, due dates, notes, undo on delete, included in the data export and in search.
+- **Drafts** are saved while typing, encrypted to the owner's key, as one row that is updated in place (saves are queued so a fast second save cannot create a duplicate). A draft can be reopened from the Drafts folder, with its attachments, and is deleted when the message is sent or discarded.
+- **Attachment files** are encrypted in the browser with a random key per file (XChaCha20-Poly1305, 10 MB per file, 25 MB per message) and uploaded to the private `attachments` bucket under `<user id>/<file id>`. The key and file name live only inside the encrypted message. Bucket policies allow each person to read, write and delete only their own folder. For a Typhoonpost recipient, `deliver-local` copies the ciphertext objects into the recipient's folder under the same ids (only from the sender's own folder, validated as UUIDs), so the recipient's copy of the message needs no change. Deleting the account first removes the person's stored files.
+- **Search** runs in the browser over data already decrypted for the session, with no query or result ever sent anywhere: every typed word must match (any order, ignoring case and accents) across sender, recipients, subject, body text (markup stripped), attachment names, contact fields, event fields and task text. It works for mail, people, calendar and tasks.
+- Tests: 34 vitest tests (record and file round trips, tamper, wrong key, wrong kind; search), 16 Deno handler tests (including file-copy path checks), a 26-check browser test of the full flow, and regressions of the earlier stages. Live Supabase storage and the deployed function were not exercised end to end from the development sandbox.
+
+Known limits of Stage 4:
+
+- The search index is rebuilt in memory each session from the mail already loaded. That is simple and private, but it means the app loads all mail at start, which will not scale to very large mailboxes. A persisted encrypted index is deferred.
+- Attachments go only to Typhoonpost recipients. The outside mail path carries message text, so a message with attachments to an outside address is not sent and the person is told why. Attachments on incoming outside mail are still names and sizes only; storing them needs the inbound function to fetch and encrypt each file, which depends on the Resend setup.
+- Deleting a draft or a sent message from the Deleted Items folder does not yet delete its stored attachment files (they stay as unreadable ciphertext until the account is deleted).
+- Lookup reveals whether an address exists, and storage reveals the number and approximate size of a person's files.
+
 ## 6. Consequences to design for
 
 - No server-side search, rules or forwarding on content.
@@ -102,7 +118,7 @@ Table `user_keys`: `user_id`, `public_key`, `wrapped_by_password`, `wrapped_by_r
 - **Stage 1: key infrastructure.** Derived sign-in, key generation, recovery key screen, password change, `user_keys` table.
 - **Stage 2: encrypted inbound.** Envelope v1, schema columns, `resend-inbound` encrypts.
 - **Stage 3: write paths (done).** Sent copies encrypted by the browser, Typhoonpost-to-Typhoonpost end-to-end. Drafts are not persisted yet.
-- **Stage 4: search, contacts, calendar, attachments.** Client index and encrypted contacts, events and files.
+- **Stage 4: search, contacts, calendar, tasks, attachments, drafts (done).** See Stage 4 as built for what is deferred.
 - **Stage 5: remove plaintext and harden.** Drop plaintext columns, purge backups, key rotation, lockout tests, outside review, then update the website.
 
 ## 8. Tests required before each stage ships

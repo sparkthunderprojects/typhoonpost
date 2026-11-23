@@ -25,6 +25,7 @@ function server() {
     countDeliveriesSince: async () => 0,
     insertEmail: async (r) => void rows.push(r as Row),
     logDelivery: async () => {},
+    copyFile: async () => {},
   };
   const send = (to: typeof bob, payload: MessagePayload) => {
     const enc = encryptMessage(payload, pk(to.sk));

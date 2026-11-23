@@ -23,6 +23,7 @@ interface SidebarProps {
   onLabelToggle: (l: LabelId) => void;
   labelCounts: Record<LabelId, number>;
   view: AppView;
+  taskCount: number;
   userEmail: string;
   contactCount: number;
   eventCount: number;
@@ -78,6 +79,7 @@ export function Sidebar({
   onLabelToggle,
   labelCounts,
   view,
+  taskCount,
   userEmail,
   contactCount,
   eventCount,
@@ -166,6 +168,18 @@ export function Sidebar({
           </div>
           <p className="mt-3 px-1 text-xs leading-relaxed text-fg-subtle">
             Add, edit, flag and group the people you email. They appear instantly in the composer's recipient suggestions.
+          </p>
+        </div>
+      )}
+      {view === 'tasks' && (
+        <div className="flex-1 overflow-y-auto px-3 pt-4 scrollbar-thin">
+          <div className="mb-2 px-1 text-[13px] font-semibold text-fg">Tasks</div>
+          <div className="flex items-center justify-between rounded bg-accent-soft px-3 py-2 text-sm font-medium text-fg">
+            <span>Open tasks</span>
+            <span className="rounded-full bg-accent px-1.5 py-0.5 text-2xs font-semibold text-accent-fg">{taskCount}</span>
+          </div>
+          <p className="mt-3 px-1 text-xs leading-relaxed text-fg-subtle">
+            Tasks are encrypted in your browser like your mail. Only you can read them.
           </p>
         </div>
       )}

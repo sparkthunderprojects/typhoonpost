@@ -196,3 +196,35 @@ describe('edge function copies', () => {
     }
   });
 });
+
+import { decryptFile, decryptRecord, encryptFile, encryptRecord } from '../record';
+import { publicKeyOf as pubOf } from '../keys';
+import { randomBytes as rb } from '../noble';
+
+describe('records and files', () => {
+  const sk = rb(32);
+  const pk = pubOf(sk);
+  it('round-trips a record and hides its content', () => {
+    const enc = encryptRecord('contact', { firstName: 'Ada', email: 'ada@example.org' }, pk);
+    expect(JSON.stringify(enc)).not.toContain('Ada');
+    expect(decryptRecord('contact', enc, sk)).toEqual({ firstName: 'Ada', email: 'ada@example.org' });
+  });
+  it('refuses a record presented as a different kind', () => {
+    const enc = encryptRecord('contact', { x: 1 }, pk);
+    expect(() => decryptRecord('task', enc, sk)).toThrow();
+  });
+  it('refuses another key and tampered ciphertext', () => {
+    const enc = encryptRecord('task', { title: 't' }, pk);
+    expect(() => decryptRecord('task', enc, rb(32))).toThrow();
+    const bad = { ...enc, payload: enc.payload.slice(0, -4) + 'AAAA' };
+    expect(() => decryptRecord('task', bad, sk)).toThrow();
+  });
+  it('round-trips a file and fails closed on tampering or the wrong key', () => {
+    const data = new Uint8Array(100_000).map((_, i) => i % 251);
+    const { blob, key } = encryptFile(data);
+    expect(decryptFile(blob, key)).toEqual(data);
+    expect(() => decryptFile(blob, rb(32))).toThrow();
+    const t = blob.slice(); t[40] ^= 1;
+    expect(() => decryptFile(t, key)).toThrow();
+  });
+});

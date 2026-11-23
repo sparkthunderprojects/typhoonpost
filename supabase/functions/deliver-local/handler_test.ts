@@ -14,7 +14,8 @@ const caller = { userId: 'alice-id', address: 'alice@typhoonpost.com' };
 const PAYLOAD = toBase64(crypto.getRandomValues(new Uint8Array(200)));
 const KEY = toBase64(crypto.getRandomValues(new Uint8Array(90)));
 
-function setup(opts: { used?: number; bobKey?: string | null } = {}) {
+function setup(opts: { used?: number; bobKey?: string | null; copyFails?: boolean } = {}) {
+  const copies: [string, string][] = [];
   const rows: Record<string, unknown>[] = [];
   const log: string[] = [];
   const db: DeliverDb = {
@@ -27,8 +28,9 @@ function setup(opts: { used?: number; bobKey?: string | null } = {}) {
     countDeliveriesSince: () => Promise.resolve(opts.used ?? 0),
     insertEmail: (r) => (rows.push(r), Promise.resolve()),
     logDelivery: (u) => (log.push(u), Promise.resolve()),
+    copyFile: (f, t) => (opts.copyFails ? Promise.reject(new Error('x')) : (copies.push([f, t]), Promise.resolve())),
   };
-  return { rows, log, db };
+  return { rows, log, db, copies };
 }
 const req = (body: unknown) => new Request('http://x/', { method: 'POST', body: JSON.stringify(body) });
 const delivery = (over: Record<string, unknown> = {}) => ({ address: 'bob@typhoonpost.com', version: 1, payload: PAYLOAD, key: KEY, size: 500, ...over });
@@ -104,4 +106,30 @@ Deno.test('handles several recipients independently', async () => {
   const r = await (await handleDeliver(req({ deliveries: [delivery(), delivery({ address: 'ghost@typhoonpost.com' })] }), caller, db)).json();
   eq(r.results.map((x: { ok: boolean }) => x.ok), [true, false]);
   eq(rows.length, 1);
+});
+
+const FID = '3f0a1b2c-4d5e-4f60-8a7b-9c0d1e2f3a4b';
+
+Deno.test('copies attached files from the sender folder to the recipient folder under the same id', async () => {
+  const { rows, copies, db } = setup();
+  const res = await handleDeliver(req({ deliveries: [delivery({ files: [FID] })] }), caller, db);
+  eq((await res.json()).results, [{ address: 'bob@typhoonpost.com', ok: true }]);
+  eq(copies, [[`alice-id/${FID}`, `bob-id/${FID}`]]);
+  eq(rows.length, 1);
+});
+
+Deno.test('a file id cannot point outside the sender folder', async () => {
+  const { rows, copies, db } = setup();
+  const res = await handleDeliver(req({ deliveries: [delivery({ files: ['../victim-id/' + FID] })] }), caller, db);
+  eq((await res.json()).results[0].error, 'invalid');
+  eq(copies.length, 0);
+  eq(rows.length, 0);
+});
+
+Deno.test('a failed file copy delivers nothing', async () => {
+  const { rows, log, db } = setup({ copyFails: true });
+  const res = await handleDeliver(req({ deliveries: [delivery({ files: [FID] })] }), caller, db);
+  eq((await res.json()).results, [{ address: 'bob@typhoonpost.com', ok: false, error: 'attachment_failed' }]);
+  eq(rows.length, 0);
+  eq(log.length, 0);
 });
