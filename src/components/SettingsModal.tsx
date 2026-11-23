@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { useState } from 'react';
 import { X, PenLine, LogOut, AtSign, Check, Loader2 } from 'lucide-react';
+import { PrivacySettings } from '@/components/PrivacySettings';
 
 interface SettingsModalProps {
   open: boolean;
@@ -11,6 +12,8 @@ interface SettingsModalProps {
   onSignOut?: () => void;
   myAddress?: string | null;
   onChangeAddress?: (handle: string) => Promise<string>;
+  onExportData?: () => Promise<void>;
+  onAccountDeleted?: () => void;
 }
 
 export function SettingsModal({
@@ -22,6 +25,8 @@ export function SettingsModal({
   onSignOut,
   myAddress,
   onChangeAddress,
+  onExportData,
+  onAccountDeleted,
 }: SettingsModalProps) {
   const [editing, setEditing] = useState(false);
   const [handle, setHandle] = useState('');
@@ -65,7 +70,7 @@ export function SettingsModal({
             exit={{ opacity: 0, scale: 0.96, y: 10 }}
             transition={{ type: 'spring', stiffness: 320, damping: 28 }}
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md overflow-hidden rounded-2xl border border-line-strong bg-bg-subtle shadow-pop"
+            className="max-h-[92vh] w-full max-w-md overflow-y-auto rounded-2xl border border-line-strong bg-bg-subtle shadow-pop scrollbar-thin"
           >
             <div className="flex items-center justify-between border-b border-line bg-bg-muted px-4 py-3">
               <div className="flex items-center gap-2">
@@ -126,6 +131,9 @@ export function SettingsModal({
                 )}
                 <p className="mt-1.5 text-2xs text-fg-subtle">People email you here, and it's the address your mail is sent from.</p>
               </div>
+            )}
+            {onExportData && onAccountDeleted && (
+              <PrivacySettings accountEmail={accountEmail} onExportData={onExportData} onAccountDeleted={onAccountDeleted} />
             )}
             <div className="p-4">
               <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-fg-subtle">

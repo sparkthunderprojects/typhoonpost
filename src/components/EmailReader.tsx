@@ -1,28 +1,11 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import DOMPurify from 'dompurify';
 import { Reply, Paperclip, Clock, MailOpen } from 'lucide-react';
 import type { Email, Contact } from '@/types';
 import { LABEL_DEFS } from '@/types';
 import { Avatar } from '@/components/Avatar';
 import { AttachmentIcon } from '@/components/AttachmentIcon';
 import { SenderHoverCard, isSenderSaved } from '@/components/SenderHoverCard';
-
-DOMPurify.addHook('afterSanitizeAttributes', (node) => {
-  if (node.tagName === 'A') {
-    node.setAttribute('target', '_blank');
-    node.setAttribute('rel', 'noopener noreferrer');
-  }
-});
-
-/** Inbound HTML comes from the open internet: strip scripts, handlers, forms and remote tracking hooks. */
-function sanitizeHtml(html: string): string {
-  return DOMPurify.sanitize(html, {
-    USE_PROFILES: { html: true },
-    FORBID_TAGS: ['style', 'form', 'input', 'button', 'iframe', 'object', 'embed', 'link', 'meta'],
-    FORBID_ATTR: ['style', 'srcset'],
-    ADD_ATTR: ['target'],
-  });
-}
+import { MessageBody } from '@/components/MessageBody';
 
 interface EmailReaderProps {
   email: Email | null;
@@ -108,10 +91,7 @@ export function EmailReader({
                   </div>
                 </div>
 
-                <div
-                  className="email-body mt-6 text-sm leading-relaxed text-fg"
-                  dangerouslySetInnerHTML={{ __html: sanitizeHtml(email.body) }}
-                />
+                <MessageBody html={email.body} senderEmail={email.senderEmail} />
 
                 {email.attachments.length > 0 && (
                   <div className="mt-8">

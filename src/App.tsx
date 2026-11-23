@@ -64,6 +64,7 @@ import { EmailReader } from '@/components/EmailReader';
 import { Composer, type ComposerState } from '@/components/Composer';
 import { ShortcutGuide } from '@/components/ShortcutGuide';
 import { SettingsModal } from '@/components/SettingsModal';
+import { MfaScreen } from '@/components/MfaScreen';
 import { ToastContainer } from '@/components/ToastContainer';
 import { ContactsView } from '@/components/ContactsView';
 import { ContactDetail } from '@/components/ContactDetail';
@@ -792,6 +793,27 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
     }
   };
 
+  const exportData = async () => {
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      account: { email: userEmail, address: myAddress ?? null },
+      signature,
+      emails,
+      contacts,
+      events,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `typhoonpost-export-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    push('Your data was downloaded');
+  };
+
   const paletteCommands: PaletteCommand[] = [
     { id: 'new-mail', group: 'Actions', label: 'New mail', Icon: PenSquare, shortcut: 'C', run: openComposer },
     { id: 'new-event', group: 'Actions', label: 'New calendar event', Icon: CalendarPlus, run: () => { setView('calendar'); openNewEvent(new Date().toISOString()); } },
@@ -996,6 +1018,8 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
         onSignOut={onSignOut}
         myAddress={myAddress}
         onChangeAddress={changeAddress}
+        onExportData={exportData}
+        onAccountDeleted={onSignOut}
       />
       <ContactForm
         open={contactFormOpen}
@@ -1026,7 +1050,7 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
 }
 
 export default function App() {
-  const { user, loading, signInWithPassword, signUpWithPassword, signOut } = useAuth();
+  const { user, loading, mfaRequired, verifyMfa, signInWithPassword, signUpWithPassword, signOut } = useAuth();
 
   if (!isSupabaseConfigured) {
     return <AuthScreen onSignIn={signInWithPassword} onSignUp={signUpWithPassword} />;
@@ -1042,6 +1066,10 @@ export default function App() {
 
   if (!user) {
     return <AuthScreen onSignIn={signInWithPassword} onSignUp={signUpWithPassword} />;
+  }
+
+  if (mfaRequired) {
+    return <MfaScreen onVerify={verifyMfa} onSignOut={signOut} />;
   }
 
   return <MailApp key={user.id} userId={user.id} userEmail={user.email ?? ''} onSignOut={signOut} />;
