@@ -1,6 +1,6 @@
 # Typhoonpost Documents: word processor plan
 
-Status: plan only. Nothing is built. The full feature list is in `word-processor-features.md`: 398 features across 18 areas. Decisions marked "Owner" need an answer before Phase 1.
+Status: release 1a (early) is built and in the beta; see section 12. The rest is plan only. The full feature list is in `word-processor-features.md`: 398 features across 18 areas. Decisions marked "Owner" need an answer before Phase 1.
 
 ## 1. What we are building
 
@@ -181,3 +181,15 @@ We build our own **layout core**: the code that decides where lines and pages br
 - Personal and Business pages gain a Documents section only when Phase 1 ships. Real-time co-editing and shared folders are Business features and appear on the Business page only when Phase 4 ships.
 - Storage limits (5 GB Personal, 50 GB Business) now cover documents and images; the plan copy should say so.
 - The existing rule stands: no "zero-access" wording on the site until the encryption Stage 5 column drop and outside review are done.
+
+## 12. Documents release 1a (early) as built
+
+Built at the owner's request so beta users can test it and give feedback. It is a first slice of release 1a, not the full 1a exit criteria in section 10; the staged-release gates still apply before it is announced publicly.
+
+**In:** Docs screen in the app rail, separate from the composer (`src/documents/`, loaded on demand); document list with search, star, copy, trash, restore and delete forever; editor with Title, Subtitle, Heading 1 to 6, Quote; fonts, sizes, bold, italic, underline, strikethrough, super and subscript, colour, highlight; alignment, line spacing; bulleted, numbered and check lists with indent; tables (add and delete rows and columns, merge, split, header row, shading); images (inline, 3 MB each, alt text); links; block quote, code block, horizontal line; find and replace; A4 or Letter; word, character and selection counts; version history (about every ten minutes, and before a restore); export to Word, PDF (through the browser's print dialog), Markdown, HTML and text.
+
+**Safety as built:** title, body and image data are encrypted in the browser (two records: a small one for the list, a body record opened only on open); an encrypted copy of unsaved work is kept on the device and recovered on reopen; saves carry a revision number and a conflicting save is detected and offered as keep-as-copy, replace or discard; a document over 10 MB is refused with a clear message; failures leave the document untouched.
+
+**Not yet (later releases):** import (.docx, .md, .txt, .html), folders, templates, real pages with headers, footers and page numbers, comments and suggestions, sharing and co-editing, mail links (attach to a message, save a message as a document), encrypted persisted search. Images are stored inside the encrypted document, not as separate files. Print and Word page breaks will not match Word exactly until Phase 2. The beta group and real-document fixtures from decisions 8 and 9 are still needed.
+
+**Tests:** 44 unit tests including encryption round trips, tamper and wrong-kind failures, Markdown, find, and a valid .docx built from every block type; a 19-step browser test covers create, type, autosave, no readable data sent or stored locally, table, find and replace, exports, reload, conflict, copy and trash.
