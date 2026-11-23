@@ -79,6 +79,17 @@ Table `user_keys`: `user_id`, `public_key`, `wrapped_by_password`, `wrapped_by_r
 - Attachment files are still not stored, only names and sizes (inside the payload). Real attachment storage is Stage 4.
 - The edge function shares `bytes.ts`, `seal.ts` and `envelope.ts` with the web app through a sync script (`scripts/sync-edge-crypto.mjs`); a test fails if the copies drift.
 
+### Stage 3 as built
+
+- Sent copies are encrypted in the browser to the sender's own key before they are saved (`src/lib/outgoing.ts`, `insertEmail` in `src/lib/db.ts`). If the key is locked, saving throws rather than storing plaintext. The sent copy is saved first, so it survives a failed delivery.
+- Mail between Typhoonpost users never passes through Resend. The sender's browser looks up the recipient's public key (`public_keys_for_addresses`, signed-in users only), encrypts a separate copy per recipient, and the `deliver-local` function stores it. The function sees only ciphertext and the recipient address.
+- Sender authenticity: the sender encrypts the message, so nothing inside it can be trusted to name the sender. `deliver-local` adds an attestation (`emails.enc_attest`): the sender's address from the server's own records, bound to the ciphertext by SHA-256 and sealed to the recipient. The recipient's browser shows the attested address and ignores the one in the payload. Tested: spoofed sender, wrong recipient, swapped ciphertext and tampered attestation are all rejected.
+- Daily limit of 300 local deliveries per account, counted in `delivery_log` (sender and time only, never recipient or content).
+- If the key lookup fails, nothing is delivered (neither local nor external), so a local recipient is never sent a plaintext copy through Resend. External recipients still go through Resend and are visible to it, as for any outside mail.
+- What the server learns: the delivery function sees who sends to whom at delivery time. The key lookup reveals whether a Typhoonpost address exists.
+- Drafts are not persisted today (autosave is a no-op), so there is nothing to encrypt yet. Encrypted drafts come with Stage 4.
+- Tests: Deno handler tests, vitest end-to-end tests that run the real delivery handler (Alice to Bob, spoofing, tampering), and a browser test of the send flow with a mocked server (sent copy and delivery requests hold no readable content, local and external recipients are routed separately, lookup failure sends nothing). Live Supabase and Resend paths were not exercised from the development sandbox.
+
 ## 6. Consequences to design for
 
 - No server-side search, rules or forwarding on content.
@@ -90,7 +101,7 @@ Table `user_keys`: `user_id`, `public_key`, `wrapped_by_password`, `wrapped_by_r
 
 - **Stage 1: key infrastructure.** Derived sign-in, key generation, recovery key screen, password change, `user_keys` table.
 - **Stage 2: encrypted inbound.** Envelope v1, schema columns, `resend-inbound` encrypts.
-- **Stage 3: write paths.** Drafts and sent copies encrypted by the browser, Typhoonpost-to-Typhoonpost end-to-end. (Reading and decrypting already shipped in Stage 2.)
+- **Stage 3: write paths (done).** Sent copies encrypted by the browser, Typhoonpost-to-Typhoonpost end-to-end. Drafts are not persisted yet.
 - **Stage 4: search, contacts, calendar, attachments.** Client index and encrypted contacts, events and files.
 - **Stage 5: remove plaintext and harden.** Drop plaintext columns, purge backups, key rotation, lockout tests, outside review, then update the website.
 

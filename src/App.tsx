@@ -29,7 +29,6 @@ import { useAuth } from '@/hooks/useAuth';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import {
   fetchEmailsForUser,
-  sendViaResend,
   subscribeToNewEmails,
   fetchMyAddress,
   claimAddress,
@@ -37,7 +36,6 @@ import {
   fetchSignature,
   saveSignature,
   seedAccountIfEmpty,
-  insertEmail,
   updateEmail as dbUpdateEmail,
   updateEmailsBulk,
   insertContact,
@@ -51,6 +49,7 @@ import {
   deleteEventRow,
 } from '@/lib/db';
 import { AuthScreen } from '@/components/AuthScreen';
+import { sendMessage } from '@/lib/outgoing';
 import { RecoveryKeyScreen, UnlockScreen } from '@/components/KeyScreens';
 import { CalendarView } from '@/components/CalendarView';
 import { EventForm } from '@/components/EventForm';
@@ -658,41 +657,26 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
 
   const sendEmail = useCallback(
     async (to: string, subject: string, body: string) => {
-      const recipients = to.split(/[,;]/).map((r) => r.trim()).filter(Boolean);
-      // Persist the sent copy first so it survives even if delivery fails.
-      let saved: Email;
+      let outcome: Awaited<ReturnType<typeof sendMessage>>;
       try {
-        saved = await insertEmail(userId, {
-          sender: 'You',
-          senderEmail: myAddress ?? userEmail,
-          avatarColor: '#0F6CBD',
-          subject,
-          preview: body.replace(/<[^>]+>/g, '').slice(0, 120) || '(no content)',
-          body,
-          read: true,
-          starred: false,
-          folder: 'sent',
-          labels: [],
-          category: 'primary',
-          toAddresses: recipients,
-        });
+        outcome = await sendMessage({ userId, myAddress: myAddress ?? userEmail, to, subject, body });
       } catch {
         push('Failed to save sent email');
         return;
       }
+      const { saved, failed } = outcome;
       setEmails((prev) => [saved, ...prev]);
 
-      try {
-        await sendViaResend({ to, subject, html: body });
+      if (failed.length === 0) {
         push(`Sent to ${to}`, 'View', () => {
           setView('mail');
           setActiveFolder('sent');
           setActiveLabel(null);
           setActiveId(saved.id);
         });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Send failed';
-        push(`Saved to Sent Items, but delivery failed: ${msg}`);
+      } else {
+        const list = failed.map((f) => `${f.address} (${f.reason})`).join('; ');
+        push(`Saved to Sent Items, but not delivered to ${list}`);
       }
     },
     [push, userId, userEmail, myAddress],

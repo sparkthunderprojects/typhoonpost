@@ -183,12 +183,16 @@ describe('message envelope', () => {
 });
 
 import { readFileSync } from 'node:fs';
-describe('edge function copy', () => {
-  it('shares the crypto files byte for byte with the web app', () => {
-    for (const f of ['bytes.ts', 'seal.ts', 'envelope.ts']) {
-      expect(readFileSync(`supabase/functions/resend-inbound/crypto/${f}`, 'utf8')).toBe(
-        readFileSync(`src/lib/crypto/${f}`, 'utf8'),
-      );
+const SHARED: Record<string, string[]> = {
+  'resend-inbound': ['bytes.ts', 'seal.ts', 'envelope.ts'],
+  'deliver-local': ['bytes.ts', 'seal.ts', 'attest.ts'],
+};
+describe('edge function copies', () => {
+  it('share the crypto files byte for byte with the web app', () => {
+    for (const [fn, files] of Object.entries(SHARED)) {
+      for (const f of files) {
+        expect(readFileSync(`supabase/functions/${fn}/crypto/${f}`, 'utf8')).toBe(readFileSync(`src/lib/crypto/${f}`, 'utf8'));
+      }
     }
   });
 });

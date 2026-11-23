@@ -26,5 +26,6 @@
     "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/lib/crypto/__tests__/delivery.test.ts"]
 }

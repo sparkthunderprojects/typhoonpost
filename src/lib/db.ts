@@ -1,5 +1,8 @@
 import { supabase } from '@/lib/supabase';
-import { decryptMessage } from '@/lib/crypto/envelope';
+import { decryptMessage, encryptMessage } from '@/lib/crypto/envelope';
+import { openAttestation } from '@/lib/crypto/attest';
+import { fromBase64 } from '@/lib/crypto/bytes';
+import { publicKeyOf } from '@/lib/crypto/keys';
 import { getPrivateKey } from '@/lib/crypto/keyStore';
 import type { Attachment, CalendarEvent, Contact, ContactGroup, Email, FolderId, LabelId, Category } from '@/types';
 import { initialEmails } from '@/data/mockEmails';
@@ -30,6 +33,7 @@ interface EmailRow {
   enc_version?: number | null;
   enc_payload?: string | null;
   enc_key?: string | null;
+  enc_attest?: string | null;
   size_bytes?: number | null;
 }
 
@@ -95,10 +99,13 @@ function openRow(row: EmailRow): EmailRow {
   try {
     if (!key) throw new Error('locked');
     const m = decryptMessage({ version: row.enc_version, payload: row.enc_payload, key: row.enc_key }, key);
+    // Mail from another Typhoonpost user carries a sealed proof of who sent it. Show that address,
+    // not whatever the sender typed into the message.
+    const senderEmail = row.enc_attest ? openAttestation(row.enc_attest, row.enc_payload, key).from : m.senderEmail;
     return {
       ...row,
       sender: m.sender,
-      sender_email: m.senderEmail,
+      sender_email: senderEmail,
       avatar_color: m.avatarColor,
       subject: m.subject,
       preview: m.preview,
@@ -118,7 +125,7 @@ function openRow(row: EmailRow): EmailRow {
       ...row,
       sender: 'Unreadable message',
       subject: 'This message could not be decrypted',
-      preview: 'It may be damaged, or it may belong to a different mailbox key.',
+      preview: 'It may be damaged, may not be from the sender it claims, or may belong to a different mailbox key.',
       body: '<p>This message could not be decrypted.</p>',
     };
   }
@@ -219,29 +226,50 @@ export async function saveSignature(userId: string, signature: string): Promise<
 // Emails: create / update
 // ---------------------------------------------------------------------------
 
-export async function insertEmail(
-  userId: string,
-  email: Omit<Email, 'id' | 'timestamp' | 'date' | 'initials' | 'attachments' | 'createdAt'>,
-): Promise<Email> {
-  const { data, error } = await supabase
-    .from('emails')
-    .insert({
-      user_id: userId,
+type NewEmail = Omit<Email, 'id' | 'timestamp' | 'date' | 'initials' | 'attachments' | 'createdAt'>;
+
+/** The readable columns stay empty; everything describing the message goes into the envelope. */
+function encryptedEmailRow(userId: string, email: NewEmail, recipientPublicKey: Uint8Array) {
+  const enc = encryptMessage(
+    {
       sender: email.sender,
-      sender_email: email.senderEmail,
-      avatar_color: email.avatarColor,
+      senderEmail: email.senderEmail,
+      avatarColor: email.avatarColor,
       subject: email.subject,
       preview: email.preview,
       body: email.body,
-      folder: email.folder,
-      labels: email.labels,
-      category: email.category,
-      read: email.read,
-      starred: email.starred,
-      has_replies: email.hasReplies ?? false,
-      snoozed_until: email.snoozedUntil ?? null,
-      to_addresses: email.toAddresses ?? [],
-    })
+      category: email.category as 'primary' | 'promotions',
+      to: email.toAddresses ?? [],
+      cc: [],
+      attachments: [],
+    },
+    recipientPublicKey,
+  );
+  return {
+    user_id: userId,
+    folder: email.folder,
+    labels: email.labels,
+    read: email.read,
+    starred: email.starred,
+    has_replies: email.hasReplies ?? false,
+    snoozed_until: email.snoozedUntil ?? null,
+    size_bytes: email.body.length,
+    enc_version: enc.version,
+    enc_payload: enc.payload,
+    enc_key: enc.key,
+  };
+}
+
+function ownPublicKey(): Uint8Array {
+  const key = getPrivateKey();
+  if (!key) throw new Error('Your mailbox is locked. Sign in again to continue.');
+  return publicKeyOf(key);
+}
+
+export async function insertEmail(userId: string, email: NewEmail): Promise<Email> {
+  const { data, error } = await supabase
+    .from('emails')
+    .insert(encryptedEmailRow(userId, email, ownPublicKey()))
     .select('*, attachments(*)')
     .single();
   if (error) throw error;
@@ -429,22 +457,8 @@ export async function seedAccountIfEmpty(userId: string): Promise<void> {
   if (error) throw error;
   if (count && count > 0) return;
 
-  const emailRows = initialEmails.map((e) => ({
-    user_id: userId,
-    sender: e.sender,
-    sender_email: e.senderEmail,
-    avatar_color: e.avatarColor,
-    subject: e.subject,
-    preview: e.preview,
-    body: e.body,
-    folder: e.folder,
-    labels: e.labels,
-    category: e.category,
-    read: e.read,
-    starred: e.starred,
-    has_replies: e.hasReplies ?? false,
-    snoozed_until: e.snoozedUntil ?? null,
-  }));
+  const pub = ownPublicKey();
+  const emailRows = initialEmails.map((e) => encryptedEmailRow(userId, e, pub));
   const { error: emailErr } = await supabase.from('emails').insert(emailRows);
   if (emailErr) throw emailErr;
 
@@ -497,6 +511,50 @@ export async function sendViaResend(payload: SendPayload): Promise<{ id: string;
     throw new Error(message);
   }
   return data as { id: string; from: string };
+}
+
+/** Public keys for whichever of these addresses belong to Typhoonpost users (address → key). */
+export async function lookupPublicKeys(addresses: string[]): Promise<Map<string, Uint8Array>> {
+  const { data, error } = await supabase.rpc('public_keys_for_addresses', { addrs: addresses });
+  if (error) throw error;
+  const out = new Map<string, Uint8Array>();
+  for (const row of (data ?? []) as { address: string; public_key: string }[]) {
+    out.set(row.address.toLowerCase(), fromBase64(row.public_key));
+  }
+  return out;
+}
+
+export interface LocalDelivery {
+  address: string;
+  version: number;
+  payload: string;
+  key: string;
+  size: number;
+}
+
+export interface LocalDeliveryResult {
+  address: string;
+  ok: boolean;
+  error?: string;
+}
+
+/** Hands browser-encrypted messages to the delivery function. */
+export async function deliverLocal(deliveries: LocalDelivery[]): Promise<LocalDeliveryResult[]> {
+  const { data, error } = await supabase.functions.invoke('deliver-local', { body: { deliveries } });
+  if (error) {
+    let message = 'Could not deliver the message';
+    const ctx = (error as { context?: Response }).context;
+    if (ctx && typeof ctx.json === 'function') {
+      try {
+        const body = await ctx.json();
+        if (body?.error) message = String(body.error);
+      } catch {
+        /* keep default */
+      }
+    }
+    throw new Error(message);
+  }
+  return (data as { results: LocalDeliveryResult[] }).results;
 }
 
 /** Calls `onNew` whenever a message lands in this user's mailbox. Returns an unsubscribe function. */
