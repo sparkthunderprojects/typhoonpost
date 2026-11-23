@@ -30,6 +30,9 @@ import { AuthScreen } from '@/components/AuthScreen';
 import { CalendarView } from '@/components/CalendarView';
 import { EventForm } from '@/components/EventForm';
 import { Sidebar } from '@/components/Sidebar';
+import { TopBar } from '@/components/TopBar';
+import { AppRail } from '@/components/AppRail';
+import { CommandBar } from '@/components/CommandBar';
 import { EmailList } from '@/components/EmailList';
 import { EmailReader } from '@/components/EmailReader';
 import { Composer, type ComposerState } from '@/components/Composer';
@@ -209,7 +212,8 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
       list = list.filter((e) => e.folder === activeFolder);
     }
     if (activeFolder === 'inbox' && !activeLabel) {
-      list = list.filter((e) => e.category === category);
+      // Focused = primary; Other = promotions + social
+      list = list.filter((e) => (category === 'primary' ? e.category === 'primary' : e.category !== 'primary'));
     }
     if (filter === 'unread') list = list.filter((e) => !e.read);
     if (filter === 'starred') list = list.filter((e) => e.starred);
@@ -414,7 +418,7 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
       if (!email) return;
       setEmails((prev) => prev.map((e) => (e.id === id ? { ...e, folder: 'trash' } : e)));
       dbUpdateEmail(id, { folder: 'trash' }).catch(() => {});
-      push('Moved to Trash', 'Undo', () => {
+      push('Moved to Deleted Items', 'Undo', () => {
         setEmails((prev) => prev.map((e) => (e.id === id ? { ...email, folder: 'inbox' } : e)));
         dbUpdateEmail(id, { folder: 'inbox' }).catch(() => {});
       });
@@ -428,6 +432,33 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
     setEmails((prev) => prev.map((e) => (e.id === id ? { ...e, read: false } : e)));
     dbUpdateEmail(id, { read: false }).catch(() => {});
   }, []);
+
+  const toggleRead = useCallback((id: string) => {
+    setEmails((prev) =>
+      prev.map((e) => {
+        if (e.id !== id) return e;
+        const read = !e.read;
+        dbUpdateEmail(id, { read }).catch(() => {});
+        return { ...e, read };
+      }),
+    );
+  }, []);
+
+  const moveEmail = useCallback(
+    (id: string, folder: FolderId) => {
+      const email = emails.find((e) => e.id === id);
+      if (!email || email.folder === folder) return;
+      setEmails((prev) => prev.map((e) => (e.id === id ? { ...e, folder, snoozedUntil: undefined } : e)));
+      dbUpdateEmail(id, { folder }).catch(() => {});
+      push(`Moved to ${FOLDER_NAMES[folder]}`, 'Undo', () => {
+        setEmails((prev) => prev.map((e) => (e.id === id ? { ...email } : e)));
+        dbUpdateEmail(id, { folder: email.folder }).catch(() => {});
+      });
+      if (activeId === id) advanceSelection(id, 1);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [emails, activeId, push],
+  );
 
   const snoozeEmail = useCallback(
     (id: string, opt: SnoozeOption) => {
@@ -485,7 +516,7 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
     const idList = Array.from(ids);
     setEmails((prev) => prev.map((e) => (ids.has(e.id) ? { ...e, folder: 'trash' } : e)));
     updateEmailsBulk(idList, { folder: 'trash' }).catch(() => {});
-    push(`Moved ${ids.size} to Trash`, 'Undo', () => {
+    push(`Moved ${ids.size} to Deleted Items`, 'Undo', () => {
       setEmails((prev) => prev.map((e) => (ids.has(e.id) ? { ...e, folder: 'inbox' } : e)));
       updateEmailsBulk(idList, { folder: 'inbox' }).catch(() => {});
     });
@@ -706,7 +737,7 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
 
       // POST to Nodemailer backend (dev SMTP via Mailpit, or your real provider once wired up)
       try {
-        await apiSendEmail({ to, subject, html: body, from: `Veloce Mail <${userEmail}>` });
+        await apiSendEmail({ to, subject, html: body, from: `Typhoonpost <${userEmail}>` });
         push(`Sent to ${to}`, 'View', () => {
           setView('mail');
           setActiveFolder('sent');
@@ -841,7 +872,21 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
   }
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-bg text-fg">
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-bg text-fg">
+      <TopBar
+        searchValue={view === 'contacts' ? contactQuery : query}
+        onSearchChange={view === 'contacts' ? setContactQuery : setQuery}
+        searchPlaceholder={view === 'contacts' ? 'Search people' : view === 'calendar' ? 'Search' : 'Search mail'}
+        searchDisabled={view === 'calendar'}
+        theme={theme}
+        onToggleTheme={toggle}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenShortcuts={() => setShortcutsOpen(true)}
+        userEmail={userEmail}
+      />
+
+      <div className="flex min-h-0 flex-1">
+      <AppRail view={view} onViewChange={handleViewChange} unreadCount={counts.inbox} />
       <Sidebar
         activeFolder={activeFolder}
         onFolderChange={handleFolderChange}
@@ -849,12 +894,8 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
         activeLabel={activeLabel}
         onLabelToggle={handleLabelToggle}
         labelCounts={labelCounts}
-        onCompose={openComposer}
-        theme={theme}
-        onToggleTheme={toggle}
-        onOpenSettings={() => setSettingsOpen(true)}
         view={view}
-        onViewChange={handleViewChange}
+        userEmail={userEmail}
         contactCount={contacts.length}
         eventCount={events.length}
         liveMode={liveMode}
@@ -864,6 +905,25 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
         liveError={liveError}
       />
 
+      <main className="flex min-w-0 flex-1 flex-col">
+        {view === 'mail' && (
+          <CommandBar
+            email={activeEmail}
+            selectionCount={selectedIds.size}
+            onNewMail={openComposer}
+            onDelete={() => (selectedIds.size > 0 ? bulkDelete() : activeId && deleteEmail(activeId))}
+            onArchive={() => (selectedIds.size > 0 ? bulkArchive() : activeId && archiveEmail(activeId))}
+            onMove={(f) => activeId && moveEmail(activeId, f)}
+            onReply={() => activeEmail && openComposerReply(activeEmail)}
+            onReplyAll={() => activeEmail && openComposerReply(activeEmail)}
+            onForward={() => activeEmail && openComposerReply(activeEmail)}
+            onToggleRead={() => activeId && toggleRead(activeId)}
+            onToggleFlag={() => activeId && toggleStar(activeId)}
+            onSnooze={(opt) => activeId && snoozeEmail(activeId, opt)}
+            onToggleLabel={(label) => activeId && toggleLabel(activeId, label)}
+          />
+        )}
+        <div className="flex min-h-0 min-w-0 flex-1">
       {view === 'mail' ? (
         <>
           <EmailList
@@ -872,8 +932,6 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
             selectedIds={selectedIds}
             filter={filter}
             onFilterChange={setFilter}
-            query={query}
-            onQueryChange={setQuery}
             onOpen={openEmail}
             onToggleSelect={toggleSelect}
             onToggleStar={toggleStar}
@@ -897,13 +955,6 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
           <EmailReader
             email={activeEmail ? { ...activeEmail, body: liveMode && liveBodies[activeEmail.id] ? liveBodies[activeEmail.id] : activeEmail.body } : null}
             onReply={() => activeEmail && openComposerReply(activeEmail)}
-            onReplyAll={() => activeEmail && openComposerReply(activeEmail)}
-            onForward={() => activeEmail && openComposerReply(activeEmail)}
-            onArchive={() => activeId && archiveEmail(activeId)}
-            onDelete={() => activeId && deleteEmail(activeId)}
-            onToggleStar={() => activeId && toggleStar(activeId)}
-            onSnooze={(opt) => activeId && snoozeEmail(activeId, opt)}
-            onToggleLabel={(label) => activeId && toggleLabel(activeId, label)}
             contacts={contacts}
             onAddToContacts={addSenderToContacts}
           />
@@ -940,7 +991,10 @@ function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
           onBulkMerge={bulkMergeContacts}
           allSelected={allContactsSelected}
         />
-      )}
+        )}
+        </div>
+      </main>
+      </div>
 
       <Composer
         state={composerState}

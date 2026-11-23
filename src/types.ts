@@ -65,12 +65,12 @@ export const LABEL_DEFS: LabelDef[] = [
 
 export const FOLDER_NAMES: Record<FolderId, string> = {
   inbox: 'Inbox',
-  starred: 'Starred',
-  sent: 'Sent',
+  starred: 'Flagged',
+  sent: 'Sent Items',
   drafts: 'Drafts',
   archive: 'Archive',
-  trash: 'Trash',
-  spam: 'Spam',
+  trash: 'Deleted Items',
+  spam: 'Junk Email',
   snoozed: 'Snoozed',
 };
 

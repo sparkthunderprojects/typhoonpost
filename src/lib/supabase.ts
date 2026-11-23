@@ -7,7 +7,7 @@ export const isSupabaseConfigured = Boolean(url && anonKey);
 
 if (!isSupabaseConfigured) {
   console.warn(
-    '[Veloce Mail] Supabase env vars are missing. Copy .env.example to .env and fill in ' +
+    '[Typhoonpost] Supabase env vars are missing. Copy .env.example to .env and fill in ' +
       'VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY from your Supabase project settings.',
   );
 }

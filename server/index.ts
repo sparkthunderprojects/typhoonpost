@@ -35,7 +35,7 @@ app.post('/api/send', async (req, res) => {
 
   try {
     const info = await transport.sendMail({
-      from: from || 'Veloce Mail <you@veloce.mail>',
+      from: from || 'Typhoonpost <you@typhoonpost.app>',
       to,
       cc: cc || undefined,
       bcc: bcc || undefined,
@@ -113,5 +113,5 @@ app.delete('/api/emails/:id', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Veloce Mail backend running on http://localhost:${PORT}`);
+  console.log(`Typhoonpost backend running on http://localhost:${PORT}`);
 });

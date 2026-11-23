@@ -1,5 +1,6 @@
+import { Logo } from '@/components/Logo';
 import { useState } from 'react';
-import { Mail, Loader2, AlertTriangle } from 'lucide-react';
+import { Loader2, AlertTriangle } from 'lucide-react';
 import { isSupabaseConfigured } from '@/lib/supabase';
 
 interface AuthScreenProps {
@@ -59,9 +60,7 @@ export function AuthScreen({ onSignIn, onSignUp }: AuthScreenProps) {
     <div className="flex h-screen w-screen items-center justify-center bg-bg text-fg p-6">
       <div className="w-full max-w-sm">
         <div className="flex items-center gap-2 mb-8 justify-center">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-accent text-accent-fg">
-            <Mail size={18} />
-          </div>
+          <Logo size={36} />
           <span className="text-lg font-semibold">Veloce Mail</span>
         </div>
 

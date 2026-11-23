@@ -1,4 +1,5 @@
-import { Search, Inbox, X, PanelLeftClose, PanelLeft, CheckSquare, Trash2, Mail, Archive, FolderInput } from 'lucide-react';
+import { useState } from 'react';
+import { Inbox, PanelLeftClose, PanelLeft, CheckSquare, Trash2, Mail, Archive, ListFilter, Check } from 'lucide-react';
 import type { Email, FilterTab, Category } from '@/types';
 import { EmailListItem } from '@/components/EmailListItem';
 
@@ -8,8 +9,6 @@ interface EmailListProps {
   selectedIds: Set<string>;
   filter: FilterTab;
   onFilterChange: (f: FilterTab) => void;
-  query: string;
-  onQueryChange: (q: string) => void;
   onOpen: (id: string) => void;
   onToggleSelect: (id: string) => void;
   onToggleStar: (id: string) => void;
@@ -30,16 +29,16 @@ interface EmailListProps {
   allSelected: boolean;
 }
 
-const filterTabs: { id: FilterTab; label: string }[] = [
+const filterOptions: { id: FilterTab; label: string }[] = [
   { id: 'all', label: 'All' },
   { id: 'unread', label: 'Unread' },
-  { id: 'starred', label: 'Starred' },
+  { id: 'starred', label: 'Flagged' },
 ];
 
-const categoryTabs: { id: Category; label: string }[] = [
-  { id: 'primary', label: 'Primary' },
-  { id: 'promotions', label: 'Promotions' },
-  { id: 'social', label: 'Social' },
+// Outlook-style Focused / Other: "Focused" is the primary category, "Other" is everything else.
+const focusTabs: { id: Category; label: string }[] = [
+  { id: 'primary', label: 'Focused' },
+  { id: 'promotions', label: 'Other' },
 ];
 
 export function EmailList({
@@ -48,8 +47,6 @@ export function EmailList({
   selectedIds,
   filter,
   onFilterChange,
-  query,
-  onQueryChange,
   onOpen,
   onToggleSelect,
   onToggleStar,
@@ -69,12 +66,14 @@ export function EmailList({
   onToggleCollapse,
   allSelected,
 }: EmailListProps) {
+  const [filterOpen, setFilterOpen] = useState(false);
+
   if (collapsed) {
     return (
       <section className="flex w-12 shrink-0 flex-col items-center border-r border-line bg-bg-subtle py-3">
         <button
           onClick={onToggleCollapse}
-          className="rounded-lg p-2 text-fg-muted transition-colors hover:bg-bg-muted hover:text-fg"
+          className="rounded p-2 text-fg-muted transition-colors hover:bg-bg-muted hover:text-fg"
           title="Expand list"
         >
           <PanelLeft className="h-4 w-4" />
@@ -83,86 +82,72 @@ export function EmailList({
     );
   }
 
-  const showCategories = folderName === 'Inbox';
+  const showFocusTabs = folderName === 'Inbox';
+  const filterLabel = filterOptions.find((o) => o.id === filter)?.label ?? 'All';
 
   return (
     <section className="flex h-full w-full min-w-0 flex-1 flex-col border-r border-line bg-bg-subtle">
-      <div className="flex items-center justify-between px-5 pb-2 pt-4">
-        <h2 className="text-base font-semibold tracking-tight text-fg">{folderName}</h2>
-        <div className="flex items-center gap-2">
-          <span className="text-2xs font-medium text-fg-subtle">{emails.length} messages</span>
+      <div className="flex h-11 items-center justify-between border-b border-line px-3">
+        {showFocusTabs ? (
+          <div className="flex items-center gap-1">
+            {focusTabs.map((t) => {
+              const active = (t.id === 'primary') === (category === 'primary');
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => onCategoryChange(t.id)}
+                  className={`relative px-3 py-2.5 text-sm transition-colors ${
+                    active ? 'font-semibold text-fg' : 'text-fg-muted hover:text-fg'
+                  }`}
+                >
+                  {t.label}
+                  {active && <span className="absolute inset-x-2 -bottom-px h-[3px] rounded-t bg-accent" />}
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <h2 className="truncate px-1 text-sm font-semibold text-fg">{folderName}</h2>
+        )}
+
+        <div className="relative flex items-center gap-1">
+          <button
+            onClick={() => setFilterOpen((v) => !v)}
+            className="flex items-center gap-1.5 rounded px-2 py-1 text-[13px] text-fg-muted transition-colors hover:bg-bg-muted hover:text-fg"
+            aria-haspopup="menu"
+            aria-expanded={filterOpen}
+          >
+            <ListFilter className="h-4 w-4" />
+            {filter === 'all' ? 'Filter' : filterLabel}
+          </button>
+          {filterOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setFilterOpen(false)} />
+              <div className="absolute right-8 top-full z-50 mt-1 w-40 overflow-hidden rounded-lg border border-line-strong bg-bg-subtle py-1 shadow-pop">
+                {filterOptions.map((o) => (
+                  <button
+                    key={o.id}
+                    onClick={() => {
+                      onFilterChange(o.id);
+                      setFilterOpen(false);
+                    }}
+                    className="flex w-full items-center justify-between px-3 py-2 text-left text-sm text-fg hover:bg-bg-muted"
+                  >
+                    {o.label}
+                    {filter === o.id && <Check className="h-4 w-4 text-accent" />}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
           <button
             onClick={onToggleCollapse}
-            className="rounded-lg p-1.5 text-fg-muted transition-colors hover:bg-bg-muted hover:text-fg"
+            className="rounded p-1.5 text-fg-muted transition-colors hover:bg-bg-muted hover:text-fg"
             title="Collapse list"
           >
             <PanelLeftClose className="h-4 w-4" />
           </button>
         </div>
-      </div>
-
-      <div className="px-5 pb-3">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-subtle" />
-          <input
-            value={query}
-            onChange={(e) => onQueryChange(e.target.value)}
-            placeholder="Search mail"
-            className="w-full rounded-lg border border-line bg-bg py-2 pl-9 pr-8 text-sm text-fg placeholder:text-fg-subtle focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
-          />
-          {query && (
-            <button
-              onClick={() => onQueryChange('')}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-fg-subtle hover:text-fg"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Category tabs */}
-      {showCategories && (
-        <div className="flex items-center gap-1 px-3">
-          {categoryTabs.map((t) => {
-            const active = category === t.id;
-            return (
-              <button
-                key={t.id}
-                onClick={() => onCategoryChange(t.id)}
-                className={`relative px-3 py-2 text-xs font-medium transition-colors ${
-                  active ? 'text-fg' : 'text-fg-muted hover:text-fg'
-                }`}
-              >
-                {t.label}
-                {active && (
-                  <span className="absolute inset-x-2 -bottom-px h-[2px] rounded-full bg-accent" />
-                )}
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Filter tabs */}
-      <div className="flex items-center gap-1 border-b border-line px-3">
-        {filterTabs.map((t) => {
-          const active = filter === t.id;
-          return (
-            <button
-              key={t.id}
-              onClick={() => onFilterChange(t.id)}
-              className={`relative px-3 py-2.5 text-xs font-medium transition-colors ${
-                active ? 'text-fg' : 'text-fg-muted hover:text-fg'
-              }`}
-            >
-              {t.label}
-              {active && (
-                <span className="absolute inset-x-2 -bottom-px h-[2px] rounded-full bg-accent" />
-              )}
-            </button>
-          );
-        })}
       </div>
 
       {/* Bulk action bar */}
@@ -179,7 +164,6 @@ export function EmailList({
           <BulkBtn onClick={onBulkMarkRead} Icon={Mail} label="Read" />
           <BulkBtn onClick={onBulkArchive} Icon={Archive} label="Archive" />
           <BulkBtn onClick={onBulkDelete} Icon={Trash2} label="Delete" danger />
-          <BulkBtn onClick={() => {}} Icon={FolderInput} label="Move" />
           <button
             onClick={onClearSelection}
             className="ml-auto rounded-md px-2 py-1 text-2xs font-medium text-accent hover:bg-bg-muted"

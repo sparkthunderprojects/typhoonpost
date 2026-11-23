@@ -158,7 +158,7 @@ export async function fetchSignature(userId: string): Promise<string> {
     .maybeSingle();
   if (error) throw error;
   if (data?.signature) return data.signature;
-  return data?.display_name ? `${data.display_name} · Veloce Mail` : 'Veloce Mail';
+  return data?.display_name ? `${data.display_name} · Typhoonpost` : 'Typhoonpost';
 }
 
 export async function saveSignature(userId: string, signature: string): Promise<void> {

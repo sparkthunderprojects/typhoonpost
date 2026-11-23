@@ -1,36 +1,14 @@
 import { AnimatePresence, motion } from 'framer-motion';
-import {
-  Reply,
-  ReplyAll,
-  Forward,
-  FolderInput,
-  Archive,
-  Trash2,
-  Star,
-  Paperclip,
-  Clock,
-  MailOpen,
-  Tag,
-} from 'lucide-react';
-import { useState } from 'react';
-import type { Email, LabelId, Contact } from '@/types';
+import { Reply, Paperclip, Clock, MailOpen } from 'lucide-react';
+import type { Email, Contact } from '@/types';
 import { LABEL_DEFS } from '@/types';
 import { Avatar } from '@/components/Avatar';
 import { AttachmentIcon } from '@/components/AttachmentIcon';
-import { SnoozeMenu, type SnoozeOption } from '@/components/SnoozeMenu';
-import { LabelPicker } from '@/components/LabelPicker';
 import { SenderHoverCard, isSenderSaved } from '@/components/SenderHoverCard';
 
 interface EmailReaderProps {
   email: Email | null;
   onReply: () => void;
-  onReplyAll: () => void;
-  onForward: () => void;
-  onArchive: () => void;
-  onDelete: () => void;
-  onToggleStar: () => void;
-  onSnooze: (opt: SnoozeOption) => void;
-  onToggleLabel: (label: LabelId) => void;
   contacts: Contact[];
   onAddToContacts: (email: Email) => void;
 }
@@ -38,19 +16,9 @@ interface EmailReaderProps {
 export function EmailReader({
   email,
   onReply,
-  onReplyAll,
-  onForward,
-  onArchive,
-  onDelete,
-  onToggleStar,
-  onSnooze,
-  onToggleLabel,
   contacts,
   onAddToContacts,
 }: EmailReaderProps) {
-  const [snoozeOpen, setSnoozeOpen] = useState(false);
-  const [labelOpen, setLabelOpen] = useState(false);
-
   return (
     <section className="flex h-full w-[42%] min-w-[380px] max-w-[640px] flex-1 flex-col bg-bg-subtle">
       <AnimatePresence mode="wait">
@@ -63,38 +31,6 @@ export function EmailReader({
             transition={{ duration: 0.18 }}
             className="flex h-full flex-col"
           >
-            {/* Toolbar */}
-            <div className="relative flex items-center gap-1 border-b border-line px-3 py-2">
-              <ReaderBtn Icon={Reply} label="Reply" onClick={onReply} />
-              <ReaderBtn Icon={ReplyAll} label="Reply All" onClick={onReplyAll} />
-              <ReaderBtn Icon={Forward} label="Forward" onClick={onForward} />
-              <div className="relative">
-                <ReaderBtn Icon={Clock} label="Snooze" onClick={() => setSnoozeOpen((v) => !v)} active={snoozeOpen} />
-                <SnoozeMenu open={snoozeOpen} onClose={() => setSnoozeOpen(false)} onSnooze={onSnooze} />
-              </div>
-              <div className="relative">
-                <ReaderBtn Icon={Tag} label="Labels" onClick={() => setLabelOpen((v) => !v)} active={labelOpen} />
-                <LabelPicker
-                  open={labelOpen}
-                  onClose={() => setLabelOpen(false)}
-                  current={email.labels}
-                  onToggle={onToggleLabel}
-                />
-              </div>
-              <ReaderBtn Icon={FolderInput} label="Move" onClick={() => {}} />
-              <ReaderBtn Icon={Archive} label="Archive" onClick={onArchive} />
-              <ReaderBtn Icon={Trash2} label="Delete" onClick={onDelete} danger />
-              <button
-                onClick={onToggleStar}
-                className="ml-auto rounded-lg p-1.5 text-fg-muted transition-colors hover:bg-bg-muted hover:text-fg"
-                aria-label="Star"
-              >
-                <Star
-                  className={`h-4 w-4 ${email.starred ? 'fill-warning text-warning' : ''}`}
-                />
-              </button>
-            </div>
-
             {/* Content */}
             <div className="flex-1 overflow-y-auto scrollbar-thin">
               <div className="px-6 py-5">
@@ -217,35 +153,5 @@ export function EmailReader({
         )}
       </AnimatePresence>
     </section>
-  );
-}
-
-function ReaderBtn({
-  Icon,
-  label,
-  onClick,
-  danger,
-  active,
-}: {
-  Icon: typeof Reply;
-  label: string;
-  onClick: () => void;
-  danger?: boolean;
-  active?: boolean;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
-        active
-          ? 'bg-accent-soft text-accent'
-          : danger
-            ? 'text-fg-muted hover:bg-danger/10 hover:text-danger'
-            : 'text-fg-muted hover:bg-bg-muted hover:text-fg'
-      }`}
-    >
-      <Icon className="h-3.5 w-3.5" />
-      <span className="hidden lg:inline">{label}</span>
-    </button>
   );
 }

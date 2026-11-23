@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { Star, Paperclip, Reply, Archive, Trash2, Mail, Clock } from 'lucide-react';
+import { Flag, Paperclip, Reply, Archive, Trash2, Mail, Clock } from 'lucide-react';
 import type { Email } from '@/types';
 import { LABEL_DEFS } from '@/types';
 import { Avatar } from '@/components/Avatar';
@@ -123,10 +123,10 @@ export function EmailListItem({
           e.stopPropagation();
           onToggleStar();
         }}
-        className="absolute right-3 top-3 shrink-0 p-1"
-        aria-label="Star"
+        className="absolute right-3 top-7 shrink-0 p-1"
+        aria-label="Flag"
       >
-        <Star
+        <Flag
           className={`h-4 w-4 transition-colors ${
             email.starred
               ? 'fill-warning text-warning'
