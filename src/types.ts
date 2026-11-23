@@ -88,7 +88,7 @@ export const FOLDER_NAMES: Record<FolderId, string> = {
   snoozed: 'Snoozed',
 };
 
-export type AppView = 'mail' | 'contacts' | 'calendar' | 'tasks';
+export type AppView = 'mail' | 'contacts' | 'calendar' | 'tasks' | 'docs';
 
 export interface Task {
   id: string;

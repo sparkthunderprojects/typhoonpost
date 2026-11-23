@@ -8,7 +8,7 @@ import { open, seal } from './seal.ts';
  * to the owner's public key), with the record's kind bound in as associated data so a ciphertext
  * stored as a contact cannot be passed off as a task, and the other way round.
  */
-export type RecordKind = 'contact' | 'event' | 'task';
+export type RecordKind = 'contact' | 'event' | 'task' | 'doc' | 'docmeta';
 
 export const RECORD_VERSION = 1;
 const NONCE_LEN = 24;

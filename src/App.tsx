@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Loader2,
   Inbox,
@@ -60,6 +60,7 @@ import {
 } from '@/lib/db';
 import { contactMatches, emailMatches, eventMatches, filterBy } from '@/lib/search';
 import { TasksView } from '@/components/TasksView';
+const DocsView = lazy(() => import('@/documents/DocsView'));
 import { migrateLegacyData, type MigrationResult } from '@/lib/migrate';
 import type { PayloadAttachment } from '@/lib/crypto/envelope';
 import { AuthScreen } from '@/components/AuthScreen';
@@ -130,6 +131,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
 
   // ---- Tasks and calendar search ----
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [docQuery, setDocQuery] = useState('');
   const [taskQuery, setTaskQuery] = useState('');
   const [eventQuery, setEventQuery] = useState('');
 
@@ -934,6 +936,8 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
     ...LABEL_DEFS.map((l) => ({ id: `cat-${l.id}`, group: 'Categories', label: l.name, Icon: Tag, keywords: 'category label', run: () => handleLabelToggle(l.id) })),
     { id: 'view-mail', group: 'Switch app', label: 'Mail', Icon: Mail, run: () => handleViewChange('mail') },
     { id: 'view-calendar', group: 'Switch app', label: 'Calendar', Icon: CalendarDays, run: () => handleViewChange('calendar') },
+    { id: 'view-docs', group: 'Switch app', label: 'Docs', Icon: FileText, keywords: 'documents word processor write letter', run: () => handleViewChange('docs') },
+    { id: 'new-doc', group: 'Actions', label: 'New document', Icon: FileText, run: () => handleViewChange('docs') },
     { id: 'view-tasks', group: 'Switch app', label: 'Tasks', Icon: CheckSquare, keywords: 'to do todo', run: () => handleViewChange('tasks') },
     { id: 'view-people', group: 'Switch app', label: 'People', Icon: Users, keywords: 'contacts', run: () => handleViewChange('contacts') },
     { id: 'theme', group: 'Preferences', label: theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode', Icon: Moon, keywords: 'theme appearance', run: toggle },
@@ -974,10 +978,10 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-bg text-fg">
       <TopBar
-        searchValue={view === 'contacts' ? contactQuery : view === 'tasks' ? taskQuery : view === 'calendar' ? eventQuery : query}
-        onSearchChange={view === 'contacts' ? setContactQuery : view === 'tasks' ? setTaskQuery : view === 'calendar' ? setEventQuery : setQuery}
+        searchValue={view === 'docs' ? docQuery : view === 'contacts' ? contactQuery : view === 'tasks' ? taskQuery : view === 'calendar' ? eventQuery : query}
+        onSearchChange={view === 'docs' ? setDocQuery : view === 'contacts' ? setContactQuery : view === 'tasks' ? setTaskQuery : view === 'calendar' ? setEventQuery : setQuery}
         searchPlaceholder={
-          view === 'contacts' ? 'Search people' : view === 'tasks' ? 'Search tasks' : view === 'calendar' ? 'Search events' : 'Search mail'
+          view === 'docs' ? 'Search documents' : view === 'contacts' ? 'Search people' : view === 'tasks' ? 'Search tasks' : view === 'calendar' ? 'Search events' : 'Search mail'
         }
         searchDisabled={false}
         theme={theme}
@@ -990,7 +994,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
 
       <div className="flex min-h-0 flex-1">
       <AppRail view={view} onViewChange={handleViewChange} unreadCount={counts.inbox} />
-      <Sidebar
+      {view !== 'docs' && <Sidebar
         activeFolder={activeFolder}
         onFolderChange={handleFolderChange}
         counts={counts}
@@ -1002,7 +1006,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
         contactCount={contacts.length}
         eventCount={events.length}
         taskCount={tasks.filter((t) => !t.done).length}
-      />
+      />}
 
       <main className="flex min-w-0 flex-1 flex-col">
         {view === 'mail' && (
@@ -1060,6 +1064,10 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
             onEditDraft={openDraft}
           />
         </>
+      ) : view === 'docs' ? (
+        <Suspense fallback={<div className="flex flex-1 items-center justify-center text-sm text-fg-muted">Opening Docs…</div>}>
+          <DocsView userId={userId} query={docQuery} />
+        </Suspense>
       ) : view === 'tasks' ? (
         <TasksView tasks={tasks} query={taskQuery} onAdd={addTask} onUpdate={updateTaskItem} onDelete={deleteTask} />
       ) : view === 'calendar' ? (

@@ -1,4 +1,4 @@
-import { Mail, CalendarDays, Users, CheckSquare } from 'lucide-react';
+import { Mail, CalendarDays, Users, CheckSquare, FileText } from 'lucide-react';
 import type { AppView } from '@/types';
 
 interface AppRailProps {
@@ -12,6 +12,7 @@ const items: { id: AppView; label: string; Icon: typeof Mail }[] = [
   { id: 'calendar', label: 'Calendar', Icon: CalendarDays },
   { id: 'contacts', label: 'People', Icon: Users },
   { id: 'tasks', label: 'Tasks', Icon: CheckSquare },
+  { id: 'docs', label: 'Docs', Icon: FileText },
 ];
 
 export function AppRail({ view, onViewChange, unreadCount }: AppRailProps) {
