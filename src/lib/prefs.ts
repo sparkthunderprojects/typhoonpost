@@ -40,7 +40,15 @@ export interface Prefs {
   undoSendSeconds: number;
   /** Draft id → time it should be sent. Sent by this browser while Typhoonpost is open. */
   scheduled: Record<string, string>;
+  calendars: CalendarDef[];
+  weekStartsOn: 0 | 1;
+  /** A second time zone shown beside the hours in Day and Week views. */
+  secondaryTz: string;
+  showTasksOnCalendar: boolean;
 }
+
+export interface CalendarDef { id: string; name: string; color: string; visible: boolean }
+export const DEFAULT_CALENDAR_ID = 'default';
 
 import { DEFAULT_AUTOREPLY, type AutoReply, type MailRule } from '@/lib/rules';
 
@@ -64,6 +72,10 @@ export const DEFAULT_PREFS: Prefs = {
   autoReplied: {},
   undoSendSeconds: 10,
   scheduled: {},
+  calendars: [{ id: 'default', name: 'Calendar', color: '#2563eb', visible: true }],
+  weekStartsOn: 1,
+  secondaryTz: '',
+  showTasksOnCalendar: true,
 };
 
 let state: Prefs = DEFAULT_PREFS;
@@ -276,3 +288,20 @@ export function setScheduled(draftId: string, at: string | null) {
     return { ...p, scheduled: next };
   });
 }
+
+// ---- Calendars ----
+/** Always at least the default calendar, even if an older record has none. */
+export const calendarsOf = (p: Prefs): CalendarDef[] => (p.calendars.length ? p.calendars : DEFAULT_PREFS.calendars);
+export const calendarOf = (p: Prefs, id?: string): CalendarDef => calendarsOf(p).find((c) => c.id === (id ?? DEFAULT_CALENDAR_ID)) ?? calendarsOf(p)[0];
+export const addCalendar = (name: string, color: string): string => {
+  const id = newId();
+  updatePrefs((p) => ({ ...p, calendars: [...calendarsOf(p), { id, name: name.trim() || 'Calendar', color, visible: true }] }));
+  return id;
+};
+export const editCalendar = (id: string, patch: Partial<Omit<CalendarDef, 'id'>>) =>
+  updatePrefs((p) => ({ ...p, calendars: calendarsOf(p).map((c) => (c.id === id ? { ...c, ...patch } : c)) }));
+export const removeCalendar = (id: string) =>
+  updatePrefs((p) => ({ ...p, calendars: calendarsOf(p).filter((c) => c.id !== id || c.id === DEFAULT_CALENDAR_ID) }));
+export const setWeekStart = (weekStartsOn: 0 | 1) => updatePrefs((p) => ({ ...p, weekStartsOn }));
+export const setSecondaryTz = (secondaryTz: string) => updatePrefs((p) => ({ ...p, secondaryTz }));
+export const setShowTasksOnCalendar = (showTasksOnCalendar: boolean) => updatePrefs((p) => ({ ...p, showTasksOnCalendar }));

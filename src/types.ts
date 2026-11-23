@@ -109,6 +109,8 @@ export interface Task {
   notes: string;
   /** Due date as YYYY-MM-DD, or null. */
   due: string | null;
+  /** Repeating tasks: finishing one creates the next. */
+  repeat?: Repeat;
   important: boolean;
   done: boolean;
   completedAt: string | null;
@@ -124,6 +126,28 @@ export interface CalendarEvent {
   end: string; // ISO 8601
   allDay: boolean;
   color: string;
+  /** Which of your calendars it belongs to. Missing means the default calendar. */
+  calendarId?: string;
+  repeat?: Repeat;
+  /** Days (YYYY-MM-DD) of a repeating event that were deleted or moved. */
+  exdates?: string[];
+  /** Minutes before the start to remind you. */
+  reminders?: number[];
+  /** The time zone the event was entered in. Times are stored as exact moments either way. */
+  tz?: string;
+  /** Private events show only as "Busy" to anyone a calendar is shared with. */
+  visibility?: 'default' | 'private';
+}
+
+export interface Repeat {
+  freq: 'daily' | 'weekly' | 'monthly' | 'yearly';
+  interval: number;
+  /** Weekly only: days of the week, 0 = Sunday. Empty means the day of the first event. */
+  byDay?: number[];
+  /** Last day (YYYY-MM-DD) an occurrence may start on. */
+  until?: string;
+  /** Total number of occurrences. */
+  count?: number;
 }
 
 export const EVENT_COLORS = ['#2563eb', '#16A34A', '#DC2626', '#F59E0B', '#8B5CF6', '#EC4899'];

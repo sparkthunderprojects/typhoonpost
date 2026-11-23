@@ -24,7 +24,7 @@ import {
   CheckSquare,
 } from 'lucide-react';
 import type { Email, FolderId, LabelId, FilterTab, Category, AppView, Contact, ContactGroup, CalendarEvent, Task, Attachment, Importance } from '@/types';
-import { contactName } from '@/types';
+import { contactName, EVENT_COLORS } from '@/types';
 import {
   addSender, categoryDefs, folderName, folderTree, getPrefs, loadPrefs, markAutoReplied, newId, resetPrefs, saveRule, setIgnored,
   setRulesCheckedAt, setScheduled, setSenderFocus, usePrefs,
@@ -88,6 +88,7 @@ import { Composer, type ComposerState, type ComposeData } from '@/components/Com
 import { conversationOf, isFocused, threadKey } from '@/lib/thread';
 import { downloadText, fileNameFor, printEmail, toEml } from '@/lib/export';
 import { followUpTaskTitle, followUpTimestamp } from '@/lib/followup';
+import { dateKey, dueReminders, nextDue, REMINDER_CHOICES, shortTime } from '@/lib/calendar';
 import { buildReply, type ReplyMode } from '@/lib/reply';
 import { processMail } from '@/lib/privacy';
 import type { Recipient } from '@/components/RecipientField';
@@ -776,14 +777,29 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
   );
 
   // ---- Calendar ----
-  const openNewEvent = useCallback((dateISO: string) => {
-    setEditingEvent(null);
-    setNewEventStart(dateISO);
-    setEventFormOpen(true);
-  }, []);
+  const [newEventEnd, setNewEventEnd] = useState<string | undefined>(undefined);
+  const [newEventAllDay, setNewEventAllDay] = useState(false);
+  const [newEventTitle, setNewEventTitle] = useState<string | undefined>(undefined);
+  const [newEventNotes, setNewEventNotes] = useState<string | undefined>(undefined);
+  const [editingOccurrence, setEditingOccurrence] = useState<Date | null>(null);
 
-  const openEditEvent = useCallback((event: CalendarEvent) => {
+  const openNewEvent = useCallback(
+    (dateISO: string, endISO?: string, allDay?: boolean, title?: string, notes?: string) => {
+      setEditingEvent(null);
+      setEditingOccurrence(null);
+      setNewEventStart(dateISO);
+      setNewEventEnd(endISO);
+      setNewEventAllDay(!!allDay);
+      setNewEventTitle(title);
+      setNewEventNotes(notes);
+      setEventFormOpen(true);
+    },
+    [],
+  );
+
+  const openEditEvent = useCallback((event: CalendarEvent, occurrenceStart?: Date) => {
     setEditingEvent(event);
+    setEditingOccurrence(occurrenceStart ?? null);
     setNewEventStart(undefined);
     setEventFormOpen(true);
   }, []);
@@ -808,13 +824,108 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
   );
 
   const deleteEvent = useCallback(
-    (id: string) => {
-      setEvents((prev) => prev.filter((ev) => ev.id !== id));
+    (id: string, scope: 'one' | 'all' = 'all') => {
+      const ev = events.find((x) => x.id === id);
+      if (ev && scope === 'one' && ev.repeat && editingOccurrence) {
+        const next = { ...ev, exdates: [...(ev.exdates ?? []), dateKey(editingOccurrence)] };
+        setEvents((prev) => prev.map((x) => (x.id === id ? next : x)));
+        const { id: _id, ...rest } = next;
+        updateEventDb(id, rest).catch(() => push('Failed to save event'));
+        push('Event deleted');
+        return;
+      }
+      setEvents((prev) => prev.filter((x) => x.id !== id));
       deleteEventRow(id).catch(() => {});
       push('Event deleted');
     },
-    [push],
+    [events, editingOccurrence, push],
   );
+
+  /** Moves one showing: a single event just moves; a repeating one gets that day skipped and a separate copy made. */
+  const moveOccurrence = useCallback(
+    (occ: { event: CalendarEvent; start: Date }, target: Date) => {
+      const ev = occ.event;
+      const duration = new Date(ev.end).getTime() - new Date(ev.start).getTime();
+      const keepClock = (t: Date) => (ev.allDay ? new Date(t.getFullYear(), t.getMonth(), t.getDate(), 0, 0) : t);
+      const newStart = keepClock(target);
+      const newEnd = new Date(newStart.getTime() + duration);
+      if (!ev.repeat) {
+        const next = { ...ev, start: newStart.toISOString(), end: newEnd.toISOString() };
+        setEvents((prev) => prev.map((x) => (x.id === ev.id ? next : x)));
+        const { id: _id, ...rest } = next;
+        updateEventDb(ev.id, rest).catch(() => push('Failed to move event'));
+        return;
+      }
+      const skipped = { ...ev, exdates: [...(ev.exdates ?? []), dateKey(occ.start)] };
+      setEvents((prev) => prev.map((x) => (x.id === ev.id ? skipped : x)));
+      const { id: _a, ...skippedRest } = skipped;
+      updateEventDb(ev.id, skippedRest).catch(() => push('Failed to move event'));
+      const { id: _b, repeat: _r, exdates: _x, ...single } = ev;
+      insertEventDb(userId, { ...single, start: newStart.toISOString(), end: newEnd.toISOString() })
+        .then((created) => setEvents((prev) => [...prev, created]))
+        .catch(() => push('Failed to move event'));
+      push('Moved this event only');
+    },
+    [push, userId],
+  );
+
+  /** A task dropped on the calendar becomes an hour of time set aside for it. */
+  const taskToCalendar = useCallback(
+    (task: Task, start: Date) => {
+      const end = new Date(start.getTime() + 3600000);
+      insertEventDb(userId, { title: task.title, description: task.notes, location: '', allDay: false, start: start.toISOString(), end: end.toISOString(), color: EVENT_COLORS[0] })
+        .then((created) => {
+          setEvents((prev) => [...prev, created]);
+          push(`Blocked out time for “${task.title}”`);
+        })
+        .catch(() => push('Failed to add to calendar'));
+    },
+    [push, userId],
+  );
+
+  const mailToCalendar = useCallback(
+    (emailId: string, start: Date) => {
+      const mail = emails.find((m) => m.id === emailId);
+      if (!mail) return;
+      openNewEvent(start.toISOString(), new Date(start.getTime() + 3600000).toISOString(), false, mail.subject || '(No subject)', `From ${mail.sender} <${mail.senderEmail}>`);
+    },
+    [emails, openNewEvent],
+  );
+
+  const toggleTaskDone = useCallback(
+    (t: Task) => updateTaskItemRef.current(t.done ? { ...t, done: false, completedAt: null } : { ...t, done: true, completedAt: new Date().toISOString() }),
+    [],
+  );
+
+  // ---- Reminders: shown while the app is open ----
+  const firedReminders = useRef<Set<string>>(new Set());
+  const eventsRef = useRef<CalendarEvent[]>([]);
+  eventsRef.current = events;
+  useEffect(() => {
+    const tick = () => {
+      for (const r of dueReminders(eventsRef.current, new Date(), firedReminders.current)) {
+        firedReminders.current.add(r.key);
+        const when = r.minutes === 0 ? 'now' : `in ${REMINDER_CHOICES.find((c) => c.minutes === r.minutes)?.label.replace(' before', '') ?? `${r.minutes} minutes`}`;
+        const title = r.occurrence.event.title || '(No title)';
+        push(`${title} starts ${when} (${shortTime(r.occurrence.start)})`, undefined, undefined, 12000);
+        try {
+          if ('Notification' in window && Notification.permission === 'granted') new Notification(title, { body: `Starts ${when}` });
+        } catch {
+          /* notifications are optional */
+        }
+      }
+    };
+    tick();
+    const t = window.setInterval(tick, 20000);
+    return () => window.clearInterval(t);
+  }, [push, events]);
+  useEffect(() => {
+    try {
+      if ('Notification' in window && Notification.permission === 'default' && events.some((e) => e.reminders?.length)) void Notification.requestPermission();
+    } catch {
+      /* ignore */
+    }
+  }, [events]);
 
   // ---- Composer ----
   // ---- Drafts: saved encrypted as you type, one row per draft ----
@@ -1180,11 +1291,23 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
 
   const updateTaskItem = useCallback(
     (task: Task) => {
+      const before = tasks.find((t) => t.id === task.id);
       setTasks((prev) => prev.map((t) => (t.id === task.id ? task : t)));
       updateTaskDb(task.id, task).catch(() => push('Failed to save task'));
+      if (before && !before.done && task.done && task.repeat) {
+        const due = nextDue(task.due, task.repeat);
+        insertTask(userId, { title: task.title, notes: task.notes, due, repeat: task.repeat, important: task.important, done: false, completedAt: null })
+          .then((t) => {
+            setTasks((prev) => [t, ...prev]);
+            push(`Next one is due ${new Date(`${due}T00:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`);
+          })
+          .catch(() => push('Failed to create the next task'));
+      }
     },
-    [push],
+    [tasks, push, userId],
   );
+  const updateTaskItemRef = useRef(updateTaskItem);
+  updateTaskItemRef.current = updateTaskItem;
   /** Flags a message for follow-up and keeps a matching task in step with it. */
   const setFollowUp = useCallback(
     (id: string, day: string | null) => {
@@ -1522,7 +1645,16 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
       ) : view === 'tasks' ? (
         <TasksView tasks={tasks} query={taskQuery} onAdd={addTask} onUpdate={updateTaskItem} onDelete={deleteTask} />
       ) : view === 'calendar' ? (
-        <CalendarView events={filterBy(events, eventQuery, eventMatches)} onCreate={openNewEvent} onOpenEvent={openEditEvent} />
+        <CalendarView
+          events={filterBy(events, eventQuery, eventMatches)}
+          tasks={tasks}
+          onCreate={openNewEvent}
+          onOpenEvent={openEditEvent}
+          onToggleTask={toggleTaskDone}
+          onTaskToCalendar={taskToCalendar}
+          onMoveOccurrence={moveOccurrence}
+          onMailToCalendar={mailToCalendar}
+        />
       ) : (
         <ContactsView
           contacts={visibleContacts}
@@ -1589,6 +1721,10 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
         onDelete={deleteEvent}
         editing={editingEvent}
         defaultStartISO={newEventStart}
+        defaultEndISO={newEventEnd}
+        defaultAllDay={newEventAllDay}
+        defaultTitle={newEventTitle}
+        defaultDescription={newEventNotes}
       />
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={paletteCommands} />
       <ShortcutGuide open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />

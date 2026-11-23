@@ -479,7 +479,15 @@ export async function fetchEventsForUser(): Promise<CalendarEvent[]> {
 }
 
 export function eventPayload(e: Omit<CalendarEvent, 'id'>): Omit<CalendarEvent, 'id'> {
-  return { title: e.title, description: e.description, location: e.location, start: e.start, end: e.end, allDay: e.allDay, color: e.color };
+  return {
+    title: e.title, description: e.description, location: e.location, start: e.start, end: e.end, allDay: e.allDay, color: e.color,
+    ...(e.calendarId && e.calendarId !== 'default' ? { calendarId: e.calendarId } : {}),
+    ...(e.repeat ? { repeat: e.repeat } : {}),
+    ...(e.exdates?.length ? { exdates: e.exdates } : {}),
+    ...(e.reminders?.length ? { reminders: e.reminders } : {}),
+    ...(e.tz ? { tz: e.tz } : {}),
+    ...(e.visibility && e.visibility !== 'default' ? { visibility: e.visibility } : {}),
+  };
 }
 
 export async function insertEvent(
@@ -780,7 +788,10 @@ interface TaskRow {
 type TaskPayload = Omit<Task, 'id' | 'createdAt'>;
 
 function pickTask(t: TaskPayload): TaskPayload {
-  return { title: t.title, notes: t.notes, due: t.due, important: t.important, done: t.done, completedAt: t.completedAt };
+  return {
+    title: t.title, notes: t.notes, due: t.due, important: t.important, done: t.done, completedAt: t.completedAt,
+    ...(t.repeat ? { repeat: t.repeat } : {}),
+  };
 }
 
 function rowToTask(row: TaskRow): Task {

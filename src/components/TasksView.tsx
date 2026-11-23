@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Check, Circle, CalendarClock, Star, ListTodo, Sun, CalendarRange, CheckCircle2, Trash2, X, Plus } from 'lucide-react';
-import type { Task } from '@/types';
+import type { Repeat, Task } from '@/types';
 
 export type TaskList = 'today' | 'important' | 'planned' | 'all' | 'completed';
 
@@ -165,7 +165,7 @@ export function TasksView({ tasks, query, onAdd, onUpdate, onDelete }: TasksView
                     {due && !t.done && (
                       <p className={`flex items-center gap-1 text-2xs ${due.overdue ? 'text-danger' : 'text-fg-subtle'}`}>
                         <CalendarClock className="h-3 w-3" />
-                        {due.text}
+                        {due.text}{t.repeat ? ' · repeats' : ''}
                       </p>
                     )}
                   </button>
@@ -224,6 +224,22 @@ export function TasksView({ tasks, query, onAdd, onUpdate, onDelete }: TasksView
               </button>
             )}
           </div>
+          <label className="mb-1 text-2xs font-medium text-fg-subtle" htmlFor="task-repeat">Repeat</label>
+          <select
+            id="task-repeat"
+            value={active.repeat?.freq ?? ''}
+            onChange={(e) => {
+              const f = e.target.value as Repeat['freq'] | '';
+              onUpdate({ ...active, repeat: f ? { freq: f, interval: active.repeat?.interval ?? 1 } : undefined });
+            }}
+            className="mb-3 rounded-lg border border-line bg-bg-subtle px-3 py-2 text-sm text-fg focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+          >
+            <option value="">Does not repeat</option>
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+            <option value="yearly">Yearly</option>
+          </select>
           <label className="mb-1 text-2xs font-medium text-fg-subtle" htmlFor="task-notes">Notes</label>
           <textarea
             id="task-notes"
