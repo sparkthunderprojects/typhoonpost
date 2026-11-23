@@ -1,0 +1,1024 @@
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Loader2 } from 'lucide-react';
+import type { Email, FolderId, LabelId, FilterTab, Category, AppView, Contact, ContactGroup, CalendarEvent } from '@/types';
+import { FOLDER_NAMES, LABEL_DEFS, contactName } from '@/types';
+import { useTheme } from '@/hooks/useTheme';
+import { useToasts } from '@/hooks/useToasts';
+import { useAuth } from '@/hooks/useAuth';
+import { isSupabaseConfigured } from '@/lib/supabase';
+import { sendEmail as apiSendEmail, fetchEmails, fetchEmailDetail, type MailpitMessage } from '@/lib/mailApi';
+import {
+  fetchEmailsForUser,
+  fetchContactsForUser,
+  fetchSignature,
+  saveSignature,
+  seedAccountIfEmpty,
+  insertEmail,
+  updateEmail as dbUpdateEmail,
+  updateEmailsBulk,
+  insertContact,
+  updateContact as dbUpdateContact,
+  deleteContactRow,
+  deleteContactsBulk,
+  restoreContact,
+  fetchEventsForUser,
+  insertEvent as insertEventDb,
+  updateEvent as updateEventDb,
+  deleteEventRow,
+} from '@/lib/db';
+import { AuthScreen } from '@/components/AuthScreen';
+import { CalendarView } from '@/components/CalendarView';
+import { EventForm } from '@/components/EventForm';
+import { Sidebar } from '@/components/Sidebar';
+import { EmailList } from '@/components/EmailList';
+import { EmailReader } from '@/components/EmailReader';
+import { Composer, type ComposerState } from '@/components/Composer';
+import { ShortcutGuide } from '@/components/ShortcutGuide';
+import { SettingsModal } from '@/components/SettingsModal';
+import { ToastContainer } from '@/components/ToastContainer';
+import { ContactsView } from '@/components/ContactsView';
+import { ContactDetail } from '@/components/ContactDetail';
+import { ContactForm } from '@/components/ContactForm';
+import type { Recipient } from '@/components/RecipientField';
+import type { SnoozeOption } from '@/components/SnoozeMenu';
+
+const SNOOZE_LABELS: Record<SnoozeOption, string> = {
+  'later-today': 'Later today',
+  tomorrow: 'Tomorrow',
+  'next-week': 'Next week',
+};
+
+const AVATAR_COLORS = ['#2563eb', '#0EA5E9', '#14B8A6', '#16A34A', '#F59E0B', '#EC4899', '#8B5CF6', '#DC2626'];
+
+function colorForSeed(seed: string): string {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  return AVATAR_COLORS[h % AVATAR_COLORS.length];
+}
+
+function mailpitToEmail(m: MailpitMessage): Email {
+  const name = m.From?.Name || m.From?.Address || 'Unknown';
+  const initials = name.split(/\s+/).map((p) => p[0]).slice(0, 2).join('').toUpperCase() || '?';
+  const created = new Date(m.Created);
+  const now = new Date();
+  const diffMs = now.getTime() - created.getTime();
+  const diffH = diffMs / 3.6e6;
+  const timestamp =
+    diffH < 1 ? 'Just now' :
+    diffH < 24 ? `${Math.floor(diffH)}h ago` :
+    diffH < 168 ? `${Math.floor(diffH / 24)}d ago` :
+    created.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const date = created.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  return {
+    id: `live-${m.ID}`,
+    sender: name,
+    senderEmail: m.From?.Address || '',
+    avatarColor: colorForSeed(m.From?.Address || name),
+    initials,
+    subject: m.Subject || '(No subject)',
+    preview: m.Snippet || '',
+    body: '',
+    timestamp,
+    date,
+    read: m.Read,
+    starred: false,
+    folder: 'inbox',
+    labels: [],
+    category: 'primary',
+    attachments: [],
+  };
+}
+
+interface MailAppProps {
+  userId: string;
+  userEmail: string;
+  onSignOut: () => void;
+}
+
+function MailApp({ userId, userEmail, onSignOut }: MailAppProps) {
+  const { theme, toggle } = useTheme();
+  const { toasts, push, dismiss } = useToasts();
+
+  // ---- Mail state ----
+  const [emails, setEmails] = useState<Email[]>([]);
+  const [dataLoading, setDataLoading] = useState(true);
+  const [dataError, setDataError] = useState<string | null>(null);
+  const [activeFolder, setActiveFolder] = useState<FolderId>('inbox');
+  const [activeLabel, setActiveLabel] = useState<LabelId | null>(null);
+  const [filter, setFilter] = useState<FilterTab>('all');
+  const [category, setCategory] = useState<Category>('primary');
+  const [query, setQuery] = useState('');
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [listCollapsed, setListCollapsed] = useState(false);
+
+  // ---- Live mail (Mailpit) ----
+  const [liveMode, setLiveMode] = useState(false);
+  const [liveEmails, setLiveEmails] = useState<Email[]>([]);
+  const [liveLoading, setLiveLoading] = useState(false);
+  const [liveBodies, setLiveBodies] = useState<Record<string, string>>({});
+  const [liveError, setLiveError] = useState<string | null>(null);
+
+  // ---- App view ----
+  const [view, setView] = useState<AppView>('mail');
+
+  // ---- Calendar state ----
+  const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [eventFormOpen, setEventFormOpen] = useState(false);
+  const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
+  const [newEventStart, setNewEventStart] = useState<string | undefined>(undefined);
+
+  // ---- Contacts state ----
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [activeContactGroup, setActiveContactGroup] = useState<ContactGroup>('all');
+  const [contactQuery, setContactQuery] = useState('');
+  const [activeContactId, setActiveContactId] = useState<string | null>(null);
+  const [selectedContactIds, setSelectedContactIds] = useState<Set<string>>(new Set());
+  const [contactFormOpen, setContactFormOpen] = useState(false);
+  const [editingContact, setEditingContact] = useState<Contact | null>(null);
+
+  // ---- Composer / modals ----
+  const [composerState, setComposerState] = useState<ComposerState>('closed');
+  const [composerPrefillTo, setComposerPrefillTo] = useState<Recipient[] | undefined>(undefined);
+  const [composerPrefillSubject, setComposerPrefillSubject] = useState<string | undefined>(undefined);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [signature, setSignatureState] = useState('');
+
+  // ---- Load this account's data from Supabase on mount ----
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setDataLoading(true);
+      setDataError(null);
+      try {
+        await seedAccountIfEmpty(userId);
+        const [loadedEmails, loadedContacts, loadedSignature, loadedEvents] = await Promise.all([
+          fetchEmailsForUser(),
+          fetchContactsForUser(),
+          fetchSignature(userId),
+          fetchEventsForUser(),
+        ]);
+        if (cancelled) return;
+        setEmails(loadedEmails);
+        setContacts(loadedContacts);
+        setSignatureState(loadedSignature);
+        setEvents(loadedEvents);
+        setActiveId(loadedEmails.find((e) => e.folder === 'inbox')?.id ?? loadedEmails[0]?.id ?? null);
+      } catch (err) {
+        if (cancelled) return;
+        setDataError(err instanceof Error ? err.message : 'Failed to load your mailbox');
+      } finally {
+        if (!cancelled) setDataLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
+
+  const setSignature = useCallback(
+    (s: string) => {
+      setSignatureState(s);
+      saveSignature(userId, s).catch(() => push('Failed to save signature'));
+    },
+    [userId, push],
+  );
+
+  // ---- Derived mail list ----
+  const visibleEmails = useMemo(() => {
+    let list = liveMode ? liveEmails : emails;
+    if (liveMode) {
+      // live mode: show all fetched emails in inbox, no category filtering
+      if (filter === 'unread') list = list.filter((e) => !e.read);
+      if (filter === 'starred') list = list.filter((e) => e.starred);
+      if (query.trim()) {
+        const q = query.toLowerCase();
+        list = list.filter(
+          (e) =>
+            e.sender.toLowerCase().includes(q) ||
+            e.subject.toLowerCase().includes(q) ||
+            e.preview.toLowerCase().includes(q),
+        );
+      }
+      return list;
+    }
+    if (activeLabel) {
+      list = list.filter((e) => e.labels.includes(activeLabel));
+    } else {
+      list = list.filter((e) => e.folder === activeFolder);
+    }
+    if (activeFolder === 'inbox' && !activeLabel) {
+      list = list.filter((e) => e.category === category);
+    }
+    if (filter === 'unread') list = list.filter((e) => !e.read);
+    if (filter === 'starred') list = list.filter((e) => e.starred);
+    if (query.trim()) {
+      const q = query.toLowerCase();
+      list = list.filter(
+        (e) =>
+          e.sender.toLowerCase().includes(q) ||
+          e.subject.toLowerCase().includes(q) ||
+          e.preview.toLowerCase().includes(q),
+      );
+    }
+    return list;
+  }, [emails, activeFolder, activeLabel, category, filter, query]);
+
+  const activeEmail = useMemo(
+    () =>
+      (liveMode ? liveEmails : emails).find((e) => e.id === activeId) ?? null,
+    [liveMode, liveEmails, emails, activeId],
+  );
+
+  // ---- Mail counts ----
+  const counts = useMemo(() => {
+    const c: Record<FolderId, number> = {
+      inbox: 0,
+      starred: 0,
+      sent: 0,
+      drafts: 0,
+      archive: 0,
+      trash: 0,
+      spam: 0,
+      snoozed: 0,
+    };
+    for (const e of emails) {
+      if (!e.read) c[e.folder]++;
+    }
+    c.starred = emails.filter((e) => e.starred).length;
+    c.snoozed = emails.filter((e) => e.folder === 'snoozed').length;
+    return c;
+  }, [emails]);
+
+  const labelCounts = useMemo(() => {
+    const c: Record<LabelId, number> = { work: 0, personal: 0, urgent: 0, finance: 0 };
+    for (const e of emails) {
+      if (!e.read) for (const l of e.labels) c[l]++;
+    }
+    return c;
+  }, [emails]);
+
+  // ---- Contacts derived ----
+  const visibleContacts = useMemo(() => {
+    let list = contacts;
+    if (activeContactGroup === 'starred') list = list.filter((c) => c.starred);
+    else if (activeContactGroup === 'frequent') list = list.filter((c) => c.frequent);
+    else if (activeContactGroup !== 'all') list = list.filter((c) => c.groups.includes(activeContactGroup));
+    if (contactQuery.trim()) {
+      const q = contactQuery.toLowerCase();
+      list = list.filter(
+        (c) =>
+          contactName(c).toLowerCase().includes(q) ||
+          c.email.toLowerCase().includes(q) ||
+          c.company.toLowerCase().includes(q),
+      );
+    }
+    return list;
+  }, [contacts, activeContactGroup, contactQuery]);
+
+  const contactGroupCounts = useMemo(() => {
+    const c: Record<ContactGroup, number> = {
+      all: contacts.length,
+      frequent: contacts.filter((c) => c.frequent).length,
+      starred: contacts.filter((c) => c.starred).length,
+      work: contacts.filter((c) => c.groups.includes('work')).length,
+      family: contacts.filter((c) => c.groups.includes('family')).length,
+      vendors: contacts.filter((c) => c.groups.includes('vendors')).length,
+    };
+    return c;
+  }, [contacts]);
+
+  const activeContact = useMemo(
+    () => contacts.find((c) => c.id === activeContactId) ?? null,
+    [contacts, activeContactId],
+  );
+
+  const contactRecentEmails = useMemo(() => {
+    if (!activeContact) return [];
+    return emails.filter((e) => e.senderEmail.toLowerCase() === activeContact.email.toLowerCase()).slice(0, 5);
+  }, [activeContact, emails]);
+
+  const allContactsSelected =
+    visibleContacts.length > 0 && visibleContacts.every((c) => selectedContactIds.has(c.id));
+
+  // ---- Live mail fetch ----
+  const refreshLiveEmails = useCallback(async () => {
+    setLiveLoading(true);
+    setLiveError(null);
+    try {
+      const data = await fetchEmails();
+      const mapped = data.messages.map(mailpitToEmail);
+      setLiveEmails(mapped);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to fetch';
+      setLiveError(msg);
+      setLiveEmails([]);
+    } finally {
+      setLiveLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (liveMode) refreshLiveEmails();
+  }, [liveMode, refreshLiveEmails]);
+
+  const handleToggleLive = () => {
+    setLiveMode((v) => !v);
+    setActiveLabel(null);
+    setFilter('all');
+    setQuery('');
+  };
+
+  // ---- Mail actions ----
+  const openEmail = useCallback((id: string) => {
+    setActiveId(id);
+    if (liveMode) {
+      setLiveEmails((prev) => prev.map((e) => (e.id === id ? { ...e, read: true } : e)));
+      // fetch body lazily if not yet loaded
+      if (!liveBodies[id]) {
+        const mailpitId = id.replace(/^live-/, '');
+        fetchEmailDetail(mailpitId)
+          .then((detail) => {
+            setLiveBodies((prev) => ({ ...prev, [id]: detail.HTML || detail.Text || '' }));
+          })
+          .catch(() => {});
+      }
+    } else {
+      setEmails((prev) => prev.map((e) => (e.id === id ? { ...e, read: true } : e)));
+      dbUpdateEmail(id, { read: true }).catch(() => {});
+    }
+  }, [liveMode, liveBodies]);
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleStar = useCallback((id: string) => {
+    setEmails((prev) =>
+      prev.map((e) => {
+        if (e.id !== id) return e;
+        const starred = !e.starred;
+        dbUpdateEmail(id, { starred }).catch(() => {});
+        return { ...e, starred };
+      }),
+    );
+  }, []);
+
+  const toggleLabel = useCallback((id: string, label: LabelId) => {
+    setEmails((prev) =>
+      prev.map((e) => {
+        if (e.id !== id) return e;
+        const has = e.labels.includes(label);
+        const labels = has ? e.labels.filter((l) => l !== label) : [...e.labels, label];
+        dbUpdateEmail(id, { labels }).catch(() => {});
+        return { ...e, labels };
+      }),
+    );
+  }, []);
+
+  const advanceSelection = useCallback(
+    (currentId: string, dir: 1 | -1) => {
+      const idx = visibleEmails.findIndex((e) => e.id === currentId);
+      if (idx === -1) return;
+      const next = visibleEmails[idx + dir];
+      if (next) setActiveId(next.id);
+    },
+    [visibleEmails],
+  );
+
+  const archiveEmail = useCallback(
+    (id: string) => {
+      const email = emails.find((e) => e.id === id);
+      if (!email) return;
+      setEmails((prev) => prev.map((e) => (e.id === id ? { ...e, folder: 'archive' } : e)));
+      dbUpdateEmail(id, { folder: 'archive' }).catch(() => {});
+      push(`Archived “${email.subject.slice(0, 40)}”`, 'Undo', () => {
+        setEmails((prev) => prev.map((e) => (e.id === id ? { ...email, folder: 'inbox' } : e)));
+        dbUpdateEmail(id, { folder: 'inbox' }).catch(() => {});
+      });
+      if (activeId === id) advanceSelection(id, 1);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [emails, activeId, push],
+  );
+
+  const deleteEmail = useCallback(
+    (id: string) => {
+      const email = emails.find((e) => e.id === id);
+      if (!email) return;
+      setEmails((prev) => prev.map((e) => (e.id === id ? { ...e, folder: 'trash' } : e)));
+      dbUpdateEmail(id, { folder: 'trash' }).catch(() => {});
+      push('Moved to Trash', 'Undo', () => {
+        setEmails((prev) => prev.map((e) => (e.id === id ? { ...email, folder: 'inbox' } : e)));
+        dbUpdateEmail(id, { folder: 'inbox' }).catch(() => {});
+      });
+      if (activeId === id) advanceSelection(id, 1);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [emails, activeId, push],
+  );
+
+  const markUnread = useCallback((id: string) => {
+    setEmails((prev) => prev.map((e) => (e.id === id ? { ...e, read: false } : e)));
+    dbUpdateEmail(id, { read: false }).catch(() => {});
+  }, []);
+
+  const snoozeEmail = useCallback(
+    (id: string, opt: SnoozeOption) => {
+      const email = emails.find((e) => e.id === id);
+      if (!email) return;
+      const label = SNOOZE_LABELS[opt];
+      setEmails((prev) =>
+        prev.map((e) =>
+          e.id === id ? { ...e, folder: 'snoozed', snoozedUntil: label } : e,
+        ),
+      );
+      dbUpdateEmail(id, { folder: 'snoozed', snoozedUntil: label }).catch(() => {});
+      push(`Snoozed until ${label}`, 'Undo', () => {
+        setEmails((prev) =>
+          prev.map((e) => (e.id === id ? { ...email, folder: 'inbox', snoozedUntil: undefined } : e)),
+        );
+        dbUpdateEmail(id, { folder: 'inbox', snoozedUntil: null }).catch(() => {});
+      });
+      if (activeId === id) advanceSelection(id, 1);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [emails, activeId, push],
+  );
+
+  // ---- Mail bulk ----
+  const allSelected = visibleEmails.length > 0 && visibleEmails.every((e) => selectedIds.has(e.id));
+
+  const selectAll = useCallback(() => {
+    if (allSelected) setSelectedIds(new Set());
+    else setSelectedIds(new Set(visibleEmails.map((e) => e.id)));
+  }, [allSelected, visibleEmails]);
+
+  const bulkMarkRead = useCallback(() => {
+    const ids = Array.from(selectedIds);
+    setEmails((prev) => prev.map((e) => (selectedIds.has(e.id) ? { ...e, read: true } : e)));
+    updateEmailsBulk(ids, { read: true }).catch(() => {});
+    push(`Marked ${selectedIds.size} as read`);
+    setSelectedIds(new Set());
+  }, [selectedIds, push]);
+
+  const bulkArchive = useCallback(() => {
+    const ids = new Set(selectedIds);
+    const idList = Array.from(ids);
+    setEmails((prev) => prev.map((e) => (ids.has(e.id) ? { ...e, folder: 'archive' } : e)));
+    updateEmailsBulk(idList, { folder: 'archive' }).catch(() => {});
+    push(`Archived ${ids.size} emails`, 'Undo', () => {
+      setEmails((prev) => prev.map((e) => (ids.has(e.id) ? { ...e, folder: 'inbox' } : e)));
+      updateEmailsBulk(idList, { folder: 'inbox' }).catch(() => {});
+    });
+    setSelectedIds(new Set());
+  }, [selectedIds, push]);
+
+  const bulkDelete = useCallback(() => {
+    const ids = new Set(selectedIds);
+    const idList = Array.from(ids);
+    setEmails((prev) => prev.map((e) => (ids.has(e.id) ? { ...e, folder: 'trash' } : e)));
+    updateEmailsBulk(idList, { folder: 'trash' }).catch(() => {});
+    push(`Moved ${ids.size} to Trash`, 'Undo', () => {
+      setEmails((prev) => prev.map((e) => (ids.has(e.id) ? { ...e, folder: 'inbox' } : e)));
+      updateEmailsBulk(idList, { folder: 'inbox' }).catch(() => {});
+    });
+    setSelectedIds(new Set());
+  }, [selectedIds, push]);
+
+  // ---- Contacts CRUD ----
+  const openContact = useCallback((id: string) => setActiveContactId(id), []);
+
+  const toggleContactSelect = useCallback((id: string) => {
+    setSelectedContactIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleContactStar = useCallback((id: string) => {
+    setContacts((prev) =>
+      prev.map((c) => {
+        if (c.id !== id) return c;
+        const starred = !c.starred;
+        dbUpdateContact(id, { starred }).catch(() => {});
+        return { ...c, starred };
+      }),
+    );
+  }, []);
+
+  const saveContact = useCallback(
+    (draft: Omit<Contact, 'id' | 'createdAt'> & { id?: string }) => {
+      if (draft.id) {
+        setContacts((prev) => prev.map((c) => (c.id === draft.id ? { ...c, ...draft } : c)));
+        dbUpdateContact(draft.id, draft).catch(() => push('Failed to save contact'));
+        push('Contact updated');
+      } else {
+        insertContact(userId, draft)
+          .then((newContact) => {
+            setContacts((prev) => [newContact, ...prev]);
+            push('Contact created');
+          })
+          .catch(() => push('Failed to create contact'));
+      }
+    },
+    [push, userId],
+  );
+
+  const deleteContact = useCallback(
+    (id: string) => {
+      const c = contacts.find((x) => x.id === id);
+      if (!c) return;
+      setContacts((prev) => prev.filter((x) => x.id !== id));
+      deleteContactRow(id).catch(() => {});
+      if (activeContactId === id) setActiveContactId(null);
+      push(`Deleted ${contactName(c)}`, 'Undo', () => {
+        restoreContact(userId, c)
+          .then((restored) => setContacts((prev) => [restored, ...prev]))
+          .catch(() => push('Failed to restore contact'));
+      });
+    },
+    [contacts, activeContactId, push, userId],
+  );
+
+  const bulkDeleteContacts = useCallback(() => {
+    const ids = new Set(selectedContactIds);
+    const idList = Array.from(ids);
+    const removed = contacts.filter((c) => ids.has(c.id));
+    setContacts((prev) => prev.filter((c) => !ids.has(c.id)));
+    deleteContactsBulk(idList).catch(() => {});
+    push(`Deleted ${ids.size} contacts`, 'Undo', () => {
+      Promise.all(removed.map((c) => restoreContact(userId, c)))
+        .then((restored) => setContacts((prev) => [...restored, ...prev]))
+        .catch(() => push('Failed to restore contacts'));
+    });
+    setSelectedContactIds(new Set());
+  }, [selectedContactIds, contacts, push, userId]);
+
+  const bulkExportContacts = useCallback(() => {
+    push(`Exported ${selectedContactIds.size} contacts`);
+    setSelectedContactIds(new Set());
+  }, [selectedContactIds, push]);
+
+  const bulkMergeContacts = useCallback(() => {
+    push(`Merge is a demo action (${selectedContactIds.size} selected)`);
+    setSelectedContactIds(new Set());
+  }, [selectedContactIds, push]);
+
+  const selectAllContacts = useCallback(() => {
+    if (allContactsSelected) setSelectedContactIds(new Set());
+    else setSelectedContactIds(new Set(visibleContacts.map((c) => c.id)));
+  }, [allContactsSelected, visibleContacts]);
+
+  // ---- Add sender to contacts ----
+  const addSenderToContacts = useCallback(
+    (email: Email) => {
+      if (contacts.some((c) => c.email.toLowerCase() === email.senderEmail.toLowerCase())) return;
+      const [first, ...rest] = email.sender.split(' ');
+      const last = rest.join(' ');
+      insertContact(userId, {
+        firstName: first,
+        lastName: last,
+        email: email.senderEmail,
+        phone: '',
+        jobTitle: '',
+        company: '',
+        avatarColor: email.avatarColor,
+        notes: `Added from email: “${email.subject}”`,
+        groups: [],
+        starred: false,
+        frequent: false,
+      })
+        .then((newContact) => {
+          setContacts((prev) => [newContact, ...prev]);
+          push(`Added ${email.sender} to contacts`);
+        })
+        .catch(() => push('Failed to add contact'));
+    },
+    [contacts, push, userId],
+  );
+
+  // ---- Calendar ----
+  const openNewEvent = useCallback((dateISO: string) => {
+    setEditingEvent(null);
+    setNewEventStart(dateISO);
+    setEventFormOpen(true);
+  }, []);
+
+  const openEditEvent = useCallback((event: CalendarEvent) => {
+    setEditingEvent(event);
+    setNewEventStart(undefined);
+    setEventFormOpen(true);
+  }, []);
+
+  const saveEvent = useCallback(
+    (draft: Omit<CalendarEvent, 'id'> & { id?: string }) => {
+      const { id, ...rest } = draft;
+      if (id) {
+        setEvents((prev) => prev.map((ev) => (ev.id === id ? { id, ...rest } : ev)));
+        updateEventDb(id, rest).catch(() => push('Failed to save event'));
+        push('Event updated');
+      } else {
+        insertEventDb(userId, rest)
+          .then((newEvent) => {
+            setEvents((prev) => [...prev, newEvent]);
+            push('Event created');
+          })
+          .catch(() => push('Failed to create event'));
+      }
+    },
+    [push, userId],
+  );
+
+  const deleteEvent = useCallback(
+    (id: string) => {
+      setEvents((prev) => prev.filter((ev) => ev.id !== id));
+      deleteEventRow(id).catch(() => {});
+      push('Event deleted');
+    },
+    [push],
+  );
+
+  // ---- Composer ----
+  const openComposer = useCallback(() => {
+    setComposerPrefillTo(undefined);
+    setComposerPrefillSubject(undefined);
+    setComposerState('open');
+  }, []);
+
+  const openComposerForContact = useCallback((c: Contact) => {
+    setView('mail');
+    setComposerPrefillTo([{ id: c.id, name: contactName(c), email: c.email, color: c.avatarColor }]);
+    setComposerPrefillSubject(undefined);
+    setComposerState('open');
+  }, []);
+
+  const openComposerReply = useCallback(
+    (email: Email) => {
+      setComposerPrefillTo([
+        { id: email.id, name: email.sender, email: email.senderEmail, color: email.avatarColor },
+      ]);
+      setComposerPrefillSubject(`Re: ${email.subject}`);
+      setComposerState('open');
+    },
+    [],
+  );
+
+  const closeComposer = useCallback(() => setComposerState('closed'), []);
+  const minimizeComposer = useCallback(() => setComposerState('minimized'), []);
+  const maximizeComposer = useCallback(
+    () => setComposerState((s) => (s === 'fullscreen' ? 'open' : 'fullscreen')),
+    [],
+  );
+  const restoreComposer = useCallback(() => setComposerState('open'), []);
+
+  const sendEmail = useCallback(
+    async (to: string, subject: string, body: string) => {
+      // Persist the sent copy first so it survives even if the SMTP hop fails.
+      let saved: Email;
+      try {
+        saved = await insertEmail(userId, {
+          sender: 'You',
+          senderEmail: userEmail,
+          avatarColor: '#2563eb',
+          subject,
+          preview: body.replace(/<[^>]+>/g, '').slice(0, 120) || '(no content)',
+          body,
+          read: true,
+          starred: false,
+          folder: 'sent',
+          labels: [],
+          category: 'primary',
+        });
+      } catch {
+        push('Failed to save sent email');
+        return;
+      }
+      setEmails((prev) => [saved, ...prev]);
+
+      // POST to Nodemailer backend (dev SMTP via Mailpit, or your real provider once wired up)
+      try {
+        await apiSendEmail({ to, subject, html: body, from: `Veloce Mail <${userEmail}>` });
+        push(`Sent to ${to}`, 'View', () => {
+          setView('mail');
+          setActiveFolder('sent');
+          setActiveLabel(null);
+          setActiveId(saved.id);
+        });
+        // if in live mode, refresh inbox to show the newly received copy
+        if (liveMode) refreshLiveEmails();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Send failed';
+        push(`Send failed: ${msg}`);
+      }
+    },
+    [push, liveMode, refreshLiveEmails, userId, userEmail],
+  );
+
+  const autosaveDraft = useCallback(
+    (_to: string, _subject: string, _body: string) => {},
+    [],
+  );
+
+  const discardDraft = useCallback(() => {
+    push('Draft discarded');
+  }, [push]);
+
+  // ---- Keyboard shortcuts ----
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      const typing =
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.isContentEditable;
+
+      if (typing) return;
+      if (composerState !== 'closed' || shortcutsOpen || settingsOpen || contactFormOpen) return;
+
+      switch (e.key.toLowerCase()) {
+        case 'j':
+          if (view === 'mail' && activeId) advanceSelection(activeId, 1);
+          break;
+        case 'k':
+          if (view === 'mail' && activeId) advanceSelection(activeId, -1);
+          break;
+        case 'e':
+          if (view === 'mail' && activeId) archiveEmail(activeId);
+          break;
+        case 'd':
+          if (view === 'mail' && activeId) deleteEmail(activeId);
+          break;
+        case 'c':
+          e.preventDefault();
+          openComposer();
+          break;
+        case '?':
+          e.preventDefault();
+          setShortcutsOpen(true);
+          break;
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [
+    view,
+    activeId,
+    advanceSelection,
+    archiveEmail,
+    deleteEmail,
+    openComposer,
+    composerState,
+    shortcutsOpen,
+    settingsOpen,
+    contactFormOpen,
+  ]);
+
+  // ---- Folder / label switching ----
+  const handleFolderChange = (f: FolderId) => {
+    setView('mail');
+    setActiveFolder(f);
+    setActiveLabel(null);
+    setFilter('all');
+    setQuery('');
+    setListCollapsed(false);
+  };
+
+  const handleLabelToggle = (l: LabelId) => {
+    setView('mail');
+    setActiveLabel((prev) => (prev === l ? null : l));
+    setFilter('all');
+    setQuery('');
+  };
+
+  const handleQuickSnooze = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    snoozeEmail(id, 'tomorrow');
+  };
+
+  const handleViewChange = (v: AppView) => {
+    setView(v);
+    if (v === 'contacts') {
+      setActiveContactId(null);
+      setSelectedContactIds(new Set());
+    }
+  };
+
+  if (dataLoading) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-bg text-fg">
+        <div className="flex items-center gap-2 text-sm text-fg-muted">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading your mailbox…
+        </div>
+      </div>
+    );
+  }
+
+  if (dataError) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-bg text-fg p-6">
+        <div className="max-w-md rounded-xl border border-line bg-bg-subtle p-6 shadow-panel text-sm">
+          <p className="font-semibold text-danger mb-2">Couldn't load your mailbox</p>
+          <p className="text-fg-muted mb-4">{dataError}</p>
+          <button
+            onClick={() => window.location.reload()}
+            className="rounded-lg bg-accent px-3 py-1.5 text-accent-fg text-sm font-medium"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-screen w-screen overflow-hidden bg-bg text-fg">
+      <Sidebar
+        activeFolder={activeFolder}
+        onFolderChange={handleFolderChange}
+        counts={counts}
+        activeLabel={activeLabel}
+        onLabelToggle={handleLabelToggle}
+        labelCounts={labelCounts}
+        onCompose={openComposer}
+        theme={theme}
+        onToggleTheme={toggle}
+        onOpenSettings={() => setSettingsOpen(true)}
+        view={view}
+        onViewChange={handleViewChange}
+        contactCount={contacts.length}
+        eventCount={events.length}
+        liveMode={liveMode}
+        onToggleLive={handleToggleLive}
+        liveLoading={liveLoading}
+        onRefreshLive={refreshLiveEmails}
+        liveError={liveError}
+      />
+
+      {view === 'mail' ? (
+        <>
+          <EmailList
+            emails={visibleEmails}
+            activeId={activeId}
+            selectedIds={selectedIds}
+            filter={filter}
+            onFilterChange={setFilter}
+            query={query}
+            onQueryChange={setQuery}
+            onOpen={openEmail}
+            onToggleSelect={toggleSelect}
+            onToggleStar={toggleStar}
+            onQuickArchive={archiveEmail}
+            onQuickDelete={deleteEmail}
+            onQuickMarkUnread={markUnread}
+            onQuickSnooze={handleQuickSnooze}
+            folderName={liveMode ? 'Live Inbox' : (activeLabel ? `Label: ${LABEL_DEFS.find((d) => d.id === activeLabel)?.name ?? activeLabel}` : FOLDER_NAMES[activeFolder])}
+            onClearSelection={() => setSelectedIds(new Set())}
+            onSelectAll={selectAll}
+            onBulkMarkRead={bulkMarkRead}
+            onBulkDelete={bulkDelete}
+            onBulkArchive={bulkArchive}
+            category={category}
+            onCategoryChange={setCategory}
+            collapsed={listCollapsed}
+            onToggleCollapse={() => setListCollapsed((v) => !v)}
+            allSelected={allSelected}
+          />
+
+          <EmailReader
+            email={activeEmail ? { ...activeEmail, body: liveMode && liveBodies[activeEmail.id] ? liveBodies[activeEmail.id] : activeEmail.body } : null}
+            onReply={() => activeEmail && openComposerReply(activeEmail)}
+            onReplyAll={() => activeEmail && openComposerReply(activeEmail)}
+            onForward={() => activeEmail && openComposerReply(activeEmail)}
+            onArchive={() => activeId && archiveEmail(activeId)}
+            onDelete={() => activeId && deleteEmail(activeId)}
+            onToggleStar={() => activeId && toggleStar(activeId)}
+            onSnooze={(opt) => activeId && snoozeEmail(activeId, opt)}
+            onToggleLabel={(label) => activeId && toggleLabel(activeId, label)}
+            contacts={contacts}
+            onAddToContacts={addSenderToContacts}
+          />
+        </>
+      ) : view === 'calendar' ? (
+        <CalendarView events={events} onCreate={openNewEvent} onOpenEvent={openEditEvent} />
+      ) : (
+        <ContactsView
+          contacts={visibleContacts}
+          activeGroup={activeContactGroup}
+          onGroupChange={setActiveContactGroup}
+          groupCounts={contactGroupCounts}
+          query={contactQuery}
+          onQueryChange={setContactQuery}
+          activeId={activeContactId}
+          onOpen={openContact}
+          selectedIds={selectedContactIds}
+          onToggleSelect={toggleContactSelect}
+          onToggleStar={toggleContactStar}
+          onEdit={(c) => {
+            setEditingContact(c);
+            setContactFormOpen(true);
+          }}
+          onSendEmail={openComposerForContact}
+          onDelete={deleteContact}
+          onCreate={() => {
+            setEditingContact(null);
+            setContactFormOpen(true);
+          }}
+          onClearSelection={() => setSelectedContactIds(new Set())}
+          onSelectAll={selectAllContacts}
+          onBulkDelete={bulkDeleteContacts}
+          onBulkExport={bulkExportContacts}
+          onBulkMerge={bulkMergeContacts}
+          allSelected={allContactsSelected}
+        />
+      )}
+
+      <Composer
+        state={composerState}
+        onClose={closeComposer}
+        onMinimize={minimizeComposer}
+        onMaximize={maximizeComposer}
+        onRestore={restoreComposer}
+        onSend={sendEmail}
+        onDiscard={discardDraft}
+        onAutosave={autosaveDraft}
+        prefillTo={composerPrefillTo}
+        prefillSubject={composerPrefillSubject}
+        signature={signature}
+        contacts={contacts}
+      />
+      <EventForm
+        open={eventFormOpen}
+        onClose={() => setEventFormOpen(false)}
+        onSave={saveEvent}
+        onDelete={deleteEvent}
+        editing={editingEvent}
+        defaultStartISO={newEventStart}
+      />
+      <ShortcutGuide open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        signature={signature}
+        onSignatureChange={setSignature}
+        accountEmail={userEmail}
+        onSignOut={onSignOut}
+      />
+      <ContactForm
+        open={contactFormOpen}
+        onClose={() => setContactFormOpen(false)}
+        onSave={saveContact}
+        editing={editingContact}
+      />
+      <ContactDetail
+        contact={activeContact}
+        onClose={() => setActiveContactId(null)}
+        onEdit={() => {
+          if (activeContact) {
+            setEditingContact(activeContact);
+            setContactFormOpen(true);
+          }
+        }}
+        onToggleStar={() => activeContact && toggleContactStar(activeContact.id)}
+        onSendEmail={() => activeContact && openComposerForContact(activeContact)}
+        recentEmails={contactRecentEmails}
+        onOpenEmail={(id) => {
+          setView('mail');
+          openEmail(id);
+        }}
+      />
+      <ToastContainer toasts={toasts} onDismiss={dismiss} />
+    </div>
+  );
+}
+
+export default function App() {
+  const { user, loading, signInWithPassword, signUpWithPassword, signOut } = useAuth();
+
+  if (!isSupabaseConfigured) {
+    return <AuthScreen onSignIn={signInWithPassword} onSignUp={signUpWithPassword} />;
+  }
+
+  if (loading) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-bg text-fg">
+        <Loader2 className="h-5 w-5 animate-spin text-fg-muted" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <AuthScreen onSignIn={signInWithPassword} onSignUp={signUpWithPassword} />;
+  }
+
+  return <MailApp key={user.id} userId={user.id} userEmail={user.email ?? ''} onSignOut={signOut} />;
+}

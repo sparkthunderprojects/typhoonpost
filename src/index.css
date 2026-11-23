@@ -1,0 +1,261 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg: 250 250 251;
+    --bg-subtle: 255 255 255;
+    --bg-muted: 244 244 247;
+    --fg: 17 17 20;
+    --fg-muted: 82 82 91;
+    --fg-subtle: 140 140 148;
+    --line: 234 234 238;
+    --line-strong: 212 212 216;
+    --accent: 37 99 235;
+    --accent-fg: 255 255 255;
+    --accent-soft: 219 234 254;
+    --success: 22 163 74;
+    --warning: 217 119 6;
+    --danger: 220 38 38;
+  }
+
+  .dark {
+    --bg: 14 14 17;
+    --bg-subtle: 24 24 28;
+    --bg-muted: 34 34 39;
+    --fg: 240 240 244;
+    --fg-muted: 161 161 170;
+    --fg-subtle: 113 113 122;
+    --line: 39 39 44;
+    --line-strong: 63 63 70;
+    --accent: 96 165 250;
+    --accent-fg: 8 12 20;
+    --accent-soft: 30 58 95;
+    --success: 34 197 94;
+    --warning: 251 146 60;
+    --danger: 248 113 113;
+  }
+
+  * {
+    border-color: rgb(var(--line));
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    background-color: rgb(var(--bg));
+    color: rgb(var(--fg));
+    font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background: rgb(var(--accent) / 0.22);
+  }
+}
+
+@layer utilities {
+  .form-input {
+    width: 100%;
+    border-radius: 0.75rem;
+    border: 1px solid rgb(var(--line));
+    background-color: rgb(var(--bg));
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+    color: rgb(var(--fg));
+  }
+  .form-input::placeholder {
+    color: rgb(var(--fg-subtle));
+  }
+  .form-input:focus {
+    outline: none;
+    border-color: rgb(var(--accent));
+    box-shadow: 0 0 0 1px rgb(var(--accent));
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--line-strong)) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: rgb(var(--line-strong));
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(var(--fg-subtle));
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+/* Rich text email body styling */
+.email-body h1,
+.email-body h2,
+.email-body h3 {
+  font-weight: 600;
+  line-height: 1.3;
+  margin-top: 1.4em;
+  margin-bottom: 0.6em;
+}
+.email-body h1 { font-size: 1.5rem; }
+.email-body h2 { font-size: 1.25rem; }
+.email-body p {
+  margin-bottom: 1em;
+  line-height: 1.7;
+}
+.email-body a {
+  color: rgb(var(--accent));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.email-body ul,
+.email-body ol {
+  margin-bottom: 1em;
+  padding-left: 1.4em;
+}
+.email-body ul { list-style: disc; }
+.email-body ol { list-style: decimal; }
+.email-body li { margin-bottom: 0.4em; line-height: 1.6; }
+.email-body strong { font-weight: 600; }
+.email-body blockquote {
+  border-left: 3px solid rgb(var(--accent));
+  padding-left: 1rem;
+  margin: 1em 0;
+  color: rgb(var(--fg-muted));
+}
+.email-body img {
+  border-radius: 0.75rem;
+  border: 1px solid rgb(var(--line));
+}
+
+/* ---- Tiptap WYSIWYG editor ---- */
+.tiptap-canvas {
+  outline: none;
+  min-height: 180px;
+  padding: 0.875rem 1rem;
+  font-size: 0.875rem;
+  line-height: 1.7;
+  color: rgb(var(--fg));
+}
+.tiptap-canvas.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: rgb(var(--fg-subtle));
+  pointer-events: none;
+  height: 0;
+}
+.tiptap-canvas p { margin-bottom: 0.75em; }
+.tiptap-canvas h1 { font-size: 1.5rem; font-weight: 600; margin: 0.8em 0 0.4em; line-height: 1.3; }
+.tiptap-canvas h2 { font-size: 1.25rem; font-weight: 600; margin: 0.8em 0 0.4em; line-height: 1.3; }
+.tiptap-canvas h3 { font-size: 1.1rem; font-weight: 600; margin: 0.6em 0 0.3em; line-height: 1.3; }
+.tiptap-canvas ul { list-style: disc; padding-left: 1.4em; margin-bottom: 0.75em; }
+.tiptap-canvas ol { list-style: decimal; padding-left: 1.4em; margin-bottom: 0.75em; }
+.tiptap-canvas li { margin-bottom: 0.3em; }
+.tiptap-canvas li > p { margin-bottom: 0; }
+.tiptap-canvas blockquote {
+  border-left: 3px solid rgb(var(--accent));
+  padding-left: 1rem;
+  margin: 0.75em 0;
+  color: rgb(var(--fg-muted));
+  font-style: italic;
+}
+.tiptap-canvas pre {
+  background: rgb(var(--bg-muted));
+  border: 1px solid rgb(var(--line));
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  font-family: ui-monospace, monospace;
+  font-size: 0.8125rem;
+  overflow-x: auto;
+  margin: 0.75em 0;
+}
+.tiptap-canvas code {
+  background: rgb(var(--bg-muted));
+  border-radius: 0.25rem;
+  padding: 0.1em 0.3em;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85em;
+}
+.tiptap-canvas hr {
+  border: none;
+  border-top: 1px solid rgb(var(--line-strong));
+  margin: 1.25em 0;
+}
+.tiptap-canvas a {
+  color: rgb(var(--accent));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.tiptap-canvas img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.5rem;
+  border: 1px solid rgb(var(--line));
+  margin: 0.5em 0;
+}
+.tiptap-canvas img.ProseMirror-selectednode {
+  outline: 2px solid rgb(var(--accent));
+  outline-offset: 2px;
+}
+.tiptap-canvas ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0;
+}
+.tiptap-canvas ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+.tiptap-canvas ul[data-type="taskList"] li > label {
+  flex-shrink: 0;
+  user-select: none;
+}
+.tiptap-canvas ul[data-type="taskList"] li > div {
+  flex: 1;
+}
+.tiptap-canvas ul[data-type="taskList"] input[type="checkbox"] {
+  cursor: pointer;
+  margin-top: 0.3em;
+}
+.tiptap-canvas table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.75em 0;
+  overflow: hidden;
+}
+.tiptap-canvas th,
+.tiptap-canvas td {
+  border: 1px solid rgb(var(--line-strong));
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  vertical-align: top;
+}
+.tiptap-canvas th {
+  background: rgb(var(--bg-muted));
+  font-weight: 600;
+}
+.tiptap-canvas .selectedCell {
+  background: rgb(var(--accent-soft));
+}
+.tiptap-canvas .tableWrapper {
+  overflow-x: auto;
+}
+.tiptap-canvas mark {
+  border-radius: 0.2rem;
+  padding: 0.05em 0.15em;
+}
