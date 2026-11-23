@@ -108,6 +108,12 @@ export function EmailListItem({
             </button>
           )}
           {email.pinned && <Pin className="h-3 w-3 shrink-0 fill-current text-accent" aria-label="Pinned" />}
+          {prefs.scheduled[email.id] && (
+            <span className="flex shrink-0 items-center gap-1 rounded-full bg-warning/10 px-1.5 py-0.5 text-2xs font-medium text-warning">
+              <Clock className="h-2.5 w-2.5" />
+              Scheduled
+            </span>
+          )}
           {email.snoozedUntil && (
             <span className="flex shrink-0 items-center gap-1 rounded-full bg-warning/10 px-1.5 py-0.5 text-2xs font-medium text-warning">
               <Clock className="h-2.5 w-2.5" />

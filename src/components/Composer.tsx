@@ -10,6 +10,7 @@ import {
   Paperclip,
   AlertCircle,
   ArrowDown,
+  CalendarClock,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { Contact, Importance } from '@/types';
@@ -39,6 +40,8 @@ interface ComposerProps {
   onMaximize: () => void;
   onRestore: () => void;
   onSend: (data: ComposeData) => void;
+  /** Hold the message in Drafts and send it from this browser at the given time. */
+  onSchedule: (data: ComposeData, at: Date) => void;
   onDiscard: () => void;
   onAutosave: (data: ComposeData) => void;
   onUploadFile: (file: File) => Promise<PayloadAttachment>;
@@ -63,6 +66,15 @@ function fingerprint(to: string, cc: string, bcc: string, importance: string, su
   return JSON.stringify([to, cc, bcc, importance, subject.trim(), text, files]);
 }
 
+/** 8 in the morning, local time, tomorrow or the coming Monday. */
+function quickTime(which: 'tomorrow' | 'monday'): Date {
+  const d = new Date();
+  d.setHours(8, 0, 0, 0);
+  if (which === 'tomorrow') d.setDate(d.getDate() + 1);
+  else d.setDate(d.getDate() + (d.getDay() === 0 ? 1 : 8 - d.getDay()));
+  return d;
+}
+
 export function Composer({
   state,
   onClose,
@@ -70,6 +82,7 @@ export function Composer({
   onMaximize,
   onRestore,
   onSend,
+  onSchedule,
   onDiscard,
   onAutosave,
   onUploadFile,
@@ -93,6 +106,8 @@ export function Composer({
   const [body, setBody] = useState('');
   const [showCc, setShowCc] = useState(false);
   const [importance, setImportance] = useState<Importance>('normal');
+  const [schedOpen, setSchedOpen] = useState(false);
+  const [schedAt, setSchedAt] = useState('');
   const [attachments, setAttachments] = useState<PayloadAttachment[]>([]);
   const [uploading, setUploading] = useState(0);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -176,6 +191,25 @@ export function Composer({
     setBody('');
     baseline.current = fingerprint('', '', '', 'normal', '', '', 0);
     dirtyRef.current = false;
+  };
+
+  const clearAll = () => {
+    setAttachments([]);
+    setToRecipients([]);
+    setCcRecipients([]);
+    setBccRecipients([]);
+    setImportance('normal');
+    setSubject('');
+    setBody('');
+    baseline.current = fingerprint('', '', '', 'normal', '', '', 0);
+    dirtyRef.current = false;
+  };
+
+  const handleSchedule = (at: Date) => {
+    if (!toRecipients.length || uploading) return;
+    setSchedOpen(false);
+    onSchedule({ ...collect(true), subject: subject.trim() || '(No subject)' }, at);
+    clearAll();
   };
 
   const handleClose = () => {
@@ -400,6 +434,55 @@ export function Composer({
           >
             <Trash2 className="h-4 w-4" />
           </button>
+          <div className="relative">
+            <button
+              onClick={() => {
+                setSchedOpen((v) => !v);
+                setSchedAt('');
+              }}
+              disabled={!toRecipients.length || uploading > 0}
+              aria-label="Schedule send"
+              aria-haspopup="menu"
+              aria-expanded={schedOpen}
+              title="Schedule send"
+              className="rounded-lg p-1.5 text-fg-subtle transition-colors hover:bg-bg hover:text-fg disabled:opacity-40"
+            >
+              <CalendarClock className="h-4 w-4" />
+            </button>
+            {schedOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setSchedOpen(false)} />
+                <div role="menu" aria-label="Schedule send" className="absolute bottom-full right-0 z-50 mb-1 w-64 overflow-hidden rounded-lg border border-line-strong bg-bg-subtle py-1 shadow-pop">
+                  <p className="px-3 py-1.5 text-2xs font-semibold uppercase tracking-wider text-fg-subtle">Send later</p>
+                  {[
+                    { label: 'Tomorrow morning', at: quickTime('tomorrow') },
+                    { label: 'Monday morning', at: quickTime('monday') },
+                  ].map((o) => (
+                    <button key={o.label} role="menuitem" onClick={() => handleSchedule(o.at)} className="flex w-full items-center justify-between px-3 py-2 text-left text-sm text-fg hover:bg-bg-muted">
+                      {o.label}
+                      <span className="text-2xs text-fg-subtle">{o.at.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}, 8:00</span>
+                    </button>
+                  ))}
+                  <div className="flex items-center gap-2 border-t border-line px-3 py-2">
+                    <input
+                      type="datetime-local"
+                      value={schedAt}
+                      onChange={(e) => setSchedAt(e.target.value)}
+                      aria-label="Pick a date and time"
+                      className="min-w-0 flex-1 rounded-md border border-line bg-bg px-2 py-1 text-xs text-fg"
+                    />
+                    <button
+                      disabled={!schedAt || new Date(schedAt).getTime() <= Date.now()}
+                      onClick={() => handleSchedule(new Date(schedAt))}
+                      className="rounded-md bg-accent px-2.5 py-1 text-xs font-semibold text-accent-fg disabled:opacity-40"
+                    >
+                      Schedule
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
           <button
             onClick={handleSend}
             disabled={!toRecipients.length || uploading > 0}

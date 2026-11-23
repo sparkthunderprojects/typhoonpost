@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { Reply, Paperclip, Clock, MailOpen, Flag, ArrowLeft } from 'lucide-react';
 import type { Email, Contact, Attachment } from '@/types';
-import { categoryDef, usePrefs } from '@/lib/prefs';
+import { categoryDef, setScheduled, usePrefs } from '@/lib/prefs';
 import { Avatar } from '@/components/Avatar';
 import { AttachmentIcon } from '@/components/AttachmentIcon';
 import { SenderHoverCard, isSenderSaved } from '@/components/SenderHoverCard';
@@ -192,6 +192,15 @@ export function EmailReader({
 
             {/* Reply bar */}
             <div className="border-t border-line p-3">
+              {email.folder === 'drafts' && prefs.scheduled[email.id] && (
+                <div className="mb-2 flex items-center justify-between rounded-lg bg-warning/10 px-3 py-2 text-xs text-warning" data-testid="scheduled-banner">
+                  <span>
+                    Scheduled for{' '}
+                    {new Date(prefs.scheduled[email.id]).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                  <button onClick={() => setScheduled(email.id, null)} className="font-semibold underline">Cancel schedule</button>
+                </div>
+              )}
               {email.folder === 'drafts' ? (
                 <button
                   onClick={() => onEditDraft(email)}

@@ -26,7 +26,23 @@ export interface Prefs {
   ignored: string[];
   /** Senders you moved to Focused or Other by hand. */
   senderFocus: Record<string, 'focused' | 'other'>;
+  /** Blocked senders go to Junk. Entries: an address or a domain. */
+  blocked: string[];
+  /** Safe senders are never blocked. */
+  safe: string[];
+  rules: MailRule[];
+  /** Mail that arrived after this moment has had the rules applied. */
+  rulesCheckedAt?: string;
+  autoReply: AutoReply;
+  /** Who got an automatic reply, and when, so nobody gets one twice in a few days. */
+  autoReplied: Record<string, string>;
+  /** Seconds a sent message is held back so you can still take it back. */
+  undoSendSeconds: number;
+  /** Draft id → time it should be sent. Sent by this browser while Typhoonpost is open. */
+  scheduled: Record<string, string>;
 }
+
+import { DEFAULT_AUTOREPLY, type AutoReply, type MailRule } from '@/lib/rules';
 
 export type ReadingPane = 'right' | 'bottom' | 'off';
 export type Density = 'comfortable' | 'compact';
@@ -41,6 +57,13 @@ export const DEFAULT_PREFS: Prefs = {
   conversations: true,
   ignored: [],
   senderFocus: {},
+  blocked: [],
+  safe: [],
+  rules: [],
+  autoReply: DEFAULT_AUTOREPLY,
+  autoReplied: {},
+  undoSendSeconds: 10,
+  scheduled: {},
 };
 
 let state: Prefs = DEFAULT_PREFS;
@@ -220,5 +243,36 @@ export function setSenderFocus(address: string, choice: 'focused' | 'other' | nu
     if (choice) next[a] = choice;
     else delete next[a];
     return { ...p, senderFocus: next };
+  });
+}
+
+// ---- Sending, rules, sender lists, auto-reply ----
+export const setUndoSendSeconds = (undoSendSeconds: number) => updatePrefs((p) => ({ ...p, undoSendSeconds }));
+export const setAutoReply = (patch: Partial<AutoReply>) => updatePrefs((p) => ({ ...p, autoReply: { ...p.autoReply, ...patch } }));
+export const markAutoReplied = (address: string, at: string) =>
+  updatePrefs((p) => ({ ...p, autoReplied: { ...p.autoReplied, [address.toLowerCase()]: at } }));
+export const setRulesCheckedAt = (rulesCheckedAt: string) => updatePrefs((p) => ({ ...p, rulesCheckedAt }));
+
+export const saveRule = (rule: MailRule) =>
+  updatePrefs((p) => ({ ...p, rules: p.rules.some((r) => r.id === rule.id) ? p.rules.map((r) => (r.id === rule.id ? rule : r)) : [...p.rules, rule] }));
+export const removeRule = (id: string) => updatePrefs((p) => ({ ...p, rules: p.rules.filter((r) => r.id !== id) }));
+
+type SenderList = 'blocked' | 'safe';
+export function addSender(list: SenderList, entry: string) {
+  const e = entry.trim().toLowerCase();
+  if (!e) return;
+  updatePrefs((p) => {
+    const other: SenderList = list === 'blocked' ? 'safe' : 'blocked';
+    return { ...p, [list]: p[list].includes(e) ? p[list] : [...p[list], e], [other]: p[other].filter((x) => x !== e) };
+  });
+}
+export const removeSender = (list: SenderList, entry: string) => updatePrefs((p) => ({ ...p, [list]: p[list].filter((x) => x !== entry) }));
+
+export function setScheduled(draftId: string, at: string | null) {
+  updatePrefs((p) => {
+    const next = { ...p.scheduled };
+    if (at) next[draftId] = at;
+    else delete next[draftId];
+    return { ...p, scheduled: next };
   });
 }

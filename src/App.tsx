@@ -25,7 +25,12 @@ import {
 } from 'lucide-react';
 import type { Email, FolderId, LabelId, FilterTab, Category, AppView, Contact, ContactGroup, CalendarEvent, Task, Attachment, Importance } from '@/types';
 import { contactName } from '@/types';
-import { categoryDefs, folderName, folderTree, loadPrefs, resetPrefs, setIgnored, setSenderFocus, usePrefs } from '@/lib/prefs';
+import {
+  addSender, categoryDefs, folderName, folderTree, getPrefs, loadPrefs, markAutoReplied, newId, resetPrefs, saveRule, setIgnored,
+  setRulesCheckedAt, setScheduled, setSenderFocus, usePrefs,
+} from '@/lib/prefs';
+import { decide, emptyRule, listMatches, shouldAutoReply, type RulePatch } from '@/lib/rules';
+import { MailSettingsDialog } from '@/components/MailSettingsDialog';
 import { useTheme } from '@/hooks/useTheme';
 import { useToasts } from '@/hooks/useToasts';
 import { useAuth } from '@/hooks/useAuth';
@@ -59,6 +64,7 @@ import {
   uploadAttachment,
   removeAttachmentFiles,
   downloadAttachment,
+  lookupPublicKeys,
 } from '@/lib/db';
 import { contactMatches, emailMatches, eventMatches, filterBy } from '@/lib/search';
 import { TasksView } from '@/components/TasksView';
@@ -123,6 +129,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
   const [query, setQuery] = useState('');
   const [activeId, setActiveId] = useState<string | null>(null);
   const [readerOpen, setReaderOpen] = useState(false);
+  const [mailSettingsOpen, setMailSettingsOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [listCollapsed, setListCollapsed] = useState(false);
 
@@ -526,6 +533,53 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
     if (ids.length) trashQuietly(ids);
   }, [emails, prefs.ignored, trashQuietly]);
 
+  const fromSender = useCallback(
+    (address: string, folder: FolderId) => emails.filter((e) => e.senderEmail.toLowerCase() === address.toLowerCase() && e.folder === folder),
+    [emails],
+  );
+
+  const blockSender = useCallback(
+    (email: Email) => {
+      addSender('blocked', email.senderEmail);
+      moveMany(fromSender(email.senderEmail, 'inbox').map((e) => e.id), 'spam');
+    },
+    [fromSender, moveMany],
+  );
+
+  const markSafe = useCallback(
+    (email: Email) => {
+      addSender('safe', email.senderEmail);
+      moveMany(fromSender(email.senderEmail, 'spam').map((e) => e.id), 'inbox');
+      push(`${email.senderEmail} is now a safe sender`);
+    },
+    [fromSender, moveMany, push],
+  );
+
+  const sweepSender = useCallback(
+    (email: Email, kind: 'archive' | 'delete') => {
+      const ids = fromSender(email.senderEmail, 'inbox').map((e) => e.id);
+      if (kind === 'delete') {
+        saveRule({ ...emptyRule(newId()), name: `Delete mail from ${email.senderEmail}`, from: email.senderEmail, delete: true });
+      }
+      if (ids.length) moveMany(ids, kind === 'archive' ? 'archive' : 'trash');
+      else push(kind === 'delete' ? 'Future mail from this sender will go to Deleted Items' : 'Nothing to sweep');
+    },
+    [fromSender, moveMany, push],
+  );
+
+  const cleanUpConversation = useCallback(
+    (email: Email) => {
+      const inInbox = conversationOf(email, emails).filter((e) => e.folder === 'inbox');
+      const older = inInbox.slice(0, -1); // conversationOf is oldest first
+      if (!older.length) {
+        push('Nothing to clean up in this conversation');
+        return;
+      }
+      moveMany(older.map((e) => e.id), 'trash');
+    },
+    [emails, moveMany, push],
+  );
+
   const cleanForOutput = useCallback((html: string) => processMail(html, { allowImages: false }).html, []);
   const printActive = useCallback(() => activeEmail && printEmail(activeEmail, cleanForOutput), [activeEmail, cleanForOutput]);
   const saveActive = useCallback(() => {
@@ -863,10 +917,10 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
   );
 
   /** Removes the saved draft once the message was sent or thrown away. */
-  const finishDraft = useCallback(() => {
+  const finishDraft = useCallback((forId?: string) => {
     draftQueue.current = draftQueue.current.then(async () => {
-      const id = draftIdRef.current;
-      draftIdRef.current = null;
+      const id = forId ?? draftIdRef.current;
+      if (!forId || draftIdRef.current === forId) draftIdRef.current = null;
       if (!id) return;
       await deleteEmailRow(id).catch(() => {});
       setEmails((prev) => prev.filter((e) => e.id !== id));
@@ -875,6 +929,10 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
 
   const openDraft = useCallback(
     (email: Email) => {
+      if (getPrefs().scheduled[email.id]) {
+        setScheduled(email.id, null);
+        push('Schedule cancelled while you edit. Schedule it again when you are ready');
+      }
       startCompose({
         to: (email.toAddresses ?? []).map(toRecipient),
         cc: (email.ccAddresses ?? []).map(toRecipient),
@@ -886,11 +944,12 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
       });
       draftIdRef.current = email.id;
     },
-    [startCompose, toRecipient],
+    [startCompose, toRecipient, push],
   );
 
-  const sendEmail = useCallback(
-    async (d: ComposeData) => {
+  /** The actual send: encrypts, delivers and files the Sent copy. */
+  const deliver = useCallback(
+    async (d: ComposeData, draftId: string | null) => {
       const { to, subject, body, attachments } = d;
       let outcome: Awaited<ReturnType<typeof sendMessage>>;
       try {
@@ -898,10 +957,10 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
           userId, myAddress: myAddress ?? userEmail, to, cc: d.cc, bcc: d.bcc, importance: d.importance, subject, body, attachments,
         });
       } catch {
-        push('Failed to save sent email');
+        push('Failed to save sent email. Your message is still in Drafts');
         return;
       }
-      finishDraft();
+      if (draftId) finishDraft(draftId);
       const { saved, failed } = outcome;
       setEmails((prev) => [saved, ...prev]);
 
@@ -919,6 +978,168 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
     },
     [push, userId, userEmail, myAddress, finishDraft],
   );
+
+  /** Holds the message for the undo-send delay, then delivers it. */
+  const sendEmail = useCallback(
+    async (d: ComposeData) => {
+      await draftQueue.current; // let a pending autosave finish so the draft id is final
+      const draftId = draftIdRef.current;
+      draftIdRef.current = null;
+      setComposerState('closed');
+      const secs = getPrefs().undoSendSeconds;
+      if (secs <= 0) {
+        void deliver(d, draftId);
+        return;
+      }
+      const timer = window.setTimeout(() => void deliver(d, draftId), secs * 1000);
+      push('Sending…', 'Undo', () => {
+        window.clearTimeout(timer);
+        startCompose({
+          to: splitList(d.to).map(toRecipient),
+          cc: splitList(d.cc).map(toRecipient),
+          bcc: splitList(d.bcc).map(toRecipient),
+          importance: d.importance,
+          subject: d.subject,
+          body: d.body,
+          attachments: d.attachments,
+        });
+        draftIdRef.current = draftId;
+      }, secs * 1000);
+    },
+    [deliver, push, startCompose, toRecipient],
+  );
+
+  /** Keeps the message in Drafts and records when to send it. Sent from this browser, not the server. */
+  const scheduleEmail = useCallback(
+    async (d: ComposeData, at: Date) => {
+      await draftQueue.current;
+      try {
+        const saved = await saveDraft(userId, draftIdRef.current, {
+          to: d.to, cc: d.cc, bcc: d.bcc, importance: d.importance, subject: d.subject, body: d.body, payloadAttachments: d.attachments,
+        });
+        draftIdRef.current = null;
+        setEmails((prev) => (prev.some((e) => e.id === saved.id) ? prev.map((e) => (e.id === saved.id ? saved : e)) : [saved, ...prev]));
+        setScheduled(saved.id, at.toISOString());
+        setComposerState('closed');
+        push(`Scheduled for ${at.toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}. It is sent from this browser, so keep Typhoonpost open`);
+      } catch {
+        push('Could not schedule the message. It is still in Drafts');
+      }
+    },
+    [userId, push],
+  );
+
+  // ---- Scheduled messages: due ones are sent from here, while Typhoonpost is open ----
+  const emailsRef = useRef<Email[]>([]);
+  emailsRef.current = emails;
+  const sendingScheduled = useRef(new Set<string>());
+  const runScheduled = useCallback(async () => {
+    const now = Date.now();
+    for (const [id, at] of Object.entries(getPrefs().scheduled)) {
+      if (new Date(at).getTime() > now || sendingScheduled.current.has(id)) continue;
+      const draft = emailsRef.current.find((e) => e.id === id && e.folder === 'drafts');
+      if (!draft) {
+        setScheduled(id, null);
+        continue;
+      }
+      sendingScheduled.current.add(id);
+      try {
+        const out = await sendMessage({
+          userId, myAddress: myAddress ?? userEmail, to: (draft.toAddresses ?? []).join(', '), cc: (draft.ccAddresses ?? []).join(', '),
+          bcc: (draft.bccAddresses ?? []).join(', '), importance: draft.importance, subject: draft.subject, body: draft.body,
+          attachments: draft.attachments.map((a) => ({ name: a.name, size: a.size, kind: a.kind, file: a.file })),
+        });
+        setScheduled(id, null);
+        finishDraft(id);
+        setEmails((prev) => [out.saved, ...prev]);
+        push(out.failed.length ? `Scheduled message sent, but not delivered to ${out.failed.map((f) => f.address).join(', ')}` : `Scheduled message "${draft.subject}" sent`);
+      } catch {
+        setScheduled(id, null);
+        push(`Could not send the scheduled message "${draft.subject}". It is still in Drafts`);
+      } finally {
+        sendingScheduled.current.delete(id);
+      }
+    }
+  }, [userId, myAddress, userEmail, finishDraft, push]);
+  useEffect(() => {
+    if (dataLoading) return;
+    void runScheduled();
+    const t = window.setInterval(() => void runScheduled(), 15000);
+    return () => window.clearInterval(t);
+  }, [dataLoading, runScheduled]);
+
+  // ---- Rules, blocked senders and automatic replies: all decided here, on new mail ----
+  const applyScreening = useCallback(
+    (list: Email[]): Map<string, RulePatch> => {
+      const patches = new Map<string, RulePatch>();
+      for (const e of list) {
+        const p = decide(e, { blocked: prefs.blocked, safe: prefs.safe, rules: prefs.rules });
+        if (p) patches.set(e.id, p);
+      }
+      if (!patches.size) return patches;
+      setEmails((prev) =>
+        prev.map((e) => {
+          const p = patches.get(e.id);
+          return p
+            ? { ...e, ...(p.folder ? { folder: p.folder as FolderId, snoozedUntil: undefined } : {}), ...(p.read !== undefined ? { read: p.read } : {}),
+                ...(p.starred !== undefined ? { starred: p.starred } : {}), ...(p.pinned !== undefined ? { pinned: p.pinned } : {}), ...(p.labels ? { labels: p.labels } : {}) }
+            : e;
+        }),
+      );
+      for (const [id, p] of patches) {
+        dbUpdateEmail(id, { ...(p.folder ? { folder: p.folder as FolderId } : {}), read: p.read, starred: p.starred, pinned: p.pinned, labels: p.labels }).catch(() => {});
+      }
+      return patches;
+    },
+    [prefs.blocked, prefs.safe, prefs.rules],
+  );
+
+  const runRulesNow = useCallback(() => applyScreening(emails.filter((e) => e.folder === 'inbox')).size, [applyScreening, emails]);
+
+  const autoReplyTo = useCallback(
+    async (list: Email[]) => {
+      const ar = getPrefs().autoReply;
+      for (const e of list.slice(0, 10)) {
+        const last = getPrefs().autoReplied[e.senderEmail.toLowerCase()];
+        if (!shouldAutoReply(e, ar, { now: new Date(), myAddress: myAddress ?? userEmail, lastReplied: last })) continue;
+        markAutoReplied(e.senderEmail, new Date().toISOString()); // first, so two arrivals never both trigger one
+        const keys = await lookupPublicKeys([e.senderEmail.toLowerCase()]).catch(() => new Map());
+        if (!keys.size) continue; // only people on Typhoonpost: the outside mail path would expose your message
+        const html = `<p>${ar.message.trim().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>')}</p>`;
+        try {
+          const out = await sendMessage({
+            userId, myAddress: myAddress ?? userEmail, to: e.senderEmail, subject: `${ar.subject.trim() || 'Automatic reply'}: ${e.subject}`, body: html,
+          });
+          setEmails((prev) => [out.saved, ...prev]);
+        } catch {
+          /* it will not be retried: one missed automatic reply is better than a repeated one */
+        }
+      }
+    },
+    [userId, myAddress, userEmail],
+  );
+
+  useEffect(() => {
+    if (dataLoading) return;
+    const at = (e: Email) => new Date(e.createdAt ?? 0).getTime();
+    if (!prefs.rulesCheckedAt) {
+      // First time: only mail that arrives from now on is sorted. Existing mail is left alone.
+      const newest = emails.reduce((m, e) => Math.max(m, at(e)), 0) || Date.now();
+      setRulesCheckedAt(new Date(newest).toISOString());
+      return;
+    }
+    const since = new Date(prefs.rulesCheckedAt).getTime();
+    const fresh = emails.filter((e) => e.folder === 'inbox' && at(e) > since);
+    if (!fresh.length) return;
+    setRulesCheckedAt(new Date(Math.max(...fresh.map(at))).toISOString());
+    const patches = applyScreening(fresh);
+    if (patches.size) push(`Your rules sorted ${patches.size} new message${patches.size === 1 ? '' : 's'}`);
+    const stays = fresh.filter((e) => {
+      const f = patches.get(e.id)?.folder;
+      return f !== 'spam' && f !== 'trash';
+    });
+    if (getPrefs().autoReply.enabled && stays.length) void autoReplyTo(stays);
+  }, [emails, dataLoading, prefs.rulesCheckedAt, applyScreening, autoReplyTo, push]);
 
   const discardDraft = useCallback(() => {
     finishDraft();
@@ -1222,6 +1443,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
             onToggleFlag={() => activeId && toggleStar(activeId)}
             onSnooze={(opt) => activeId && snoozeEmail(activeId, opt)}
             onFollowUp={(day) => activeId && setFollowUp(activeId, day)}
+            onOpenMailSettings={() => setMailSettingsOpen(true)}
             onToggleLabel={(label) => activeId && toggleLabel(activeId, label)}
             more={{
               ignored: activeIgnored,
@@ -1230,6 +1452,12 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
               onPrint: printActive,
               onSaveAs: saveActive,
               onIgnore: () => activeEmail && toggleIgnore(activeEmail),
+              senderBlocked: activeEmail ? listMatches(prefs.blocked, activeEmail.senderEmail) : false,
+              senderSafe: activeEmail ? listMatches(prefs.safe, activeEmail.senderEmail) : false,
+              onBlock: () => activeEmail && blockSender(activeEmail),
+              onSafe: () => activeEmail && markSafe(activeEmail),
+              onSweep: (kind) => activeEmail && sweepSender(activeEmail, kind),
+              onCleanUp: () => activeEmail && cleanUpConversation(activeEmail),
               onSenderFocus: (choice) => {
                 if (!activeEmail) return;
                 setSenderFocus(activeEmail.senderEmail, choice);
@@ -1337,6 +1565,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
         onMaximize={maximizeComposer}
         onRestore={restoreComposer}
         onSend={sendEmail}
+        onSchedule={scheduleEmail}
         onDiscard={discardDraft}
         onAutosave={autosaveDraft}
         onUploadFile={uploadFile}
@@ -1363,6 +1592,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
       />
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={paletteCommands} />
       <ShortcutGuide open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+      <MailSettingsDialog open={mailSettingsOpen} onClose={() => setMailSettingsOpen(false)} onRunRules={runRulesNow} />
       <SettingsModal
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
@@ -1403,6 +1633,8 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
     </div>
   );
 }
+
+const splitList = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
 
 export default function App() {
   const auth = useAuth();

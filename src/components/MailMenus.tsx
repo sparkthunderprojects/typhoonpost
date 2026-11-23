@@ -1,4 +1,4 @@
-import { Check, Eye, MoreHorizontal } from 'lucide-react';
+import { Check, Eye, MoreHorizontal, Settings2 } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { setConversations, setDensity, setReadingPane, usePrefs, type Density, type ReadingPane } from '@/lib/prefs';
 
@@ -89,9 +89,18 @@ export interface MoreMenuProps {
   onSaveAs: () => void;
   onIgnore: () => void;
   onSenderFocus: (choice: 'focused' | 'other' | null) => void;
+  senderBlocked: boolean;
+  senderSafe: boolean;
+  onBlock: () => void;
+  onSafe: () => void;
+  onSweep: (kind: 'archive' | 'delete') => void;
+  onCleanUp: () => void;
 }
 
-export function MoreMenu({ hasEmail, ignored, focus, inFocused, onPrint, onSaveAs, onIgnore, onSenderFocus }: MoreMenuProps) {
+export function MoreMenu({
+  hasEmail, ignored, focus, inFocused, onPrint, onSaveAs, onIgnore, onSenderFocus,
+  senderBlocked, senderSafe, onBlock, onSafe, onSweep, onCleanUp,
+}: MoreMenuProps) {
   const [open, setOpen] = useState(false);
   const run = (fn: () => void) => () => {
     fn();
@@ -123,8 +132,28 @@ export function MoreMenu({ hasEmail, ignored, focus, inFocused, onPrint, onSaveA
             <Item label="Always move this sender to Focused" onClick={run(() => onSenderFocus('focused'))} />
           )}
           {focus && <Item label="Go back to automatic sorting" onClick={run(() => onSenderFocus(null))} />}
+          <div className="my-1 border-t border-line" />
+          <Item label="Clean up conversation (keep the newest)" onClick={run(onCleanUp)} />
+          <Item label="Sweep: archive all from this sender" onClick={run(() => onSweep('archive'))} />
+          <Item label="Sweep: delete all from this sender, and future mail" onClick={run(() => onSweep('delete'))} />
+          <div className="my-1 border-t border-line" />
+          {!senderBlocked && <Item label="Block sender" onClick={run(onBlock)} />}
+          {!senderSafe && <Item label={senderBlocked ? 'Unblock and mark as safe' : 'Mark sender as safe'} onClick={run(onSafe)} />}
         </Panel>
       )}
     </div>
+  );
+}
+
+export function MailSettingsButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      title="Mail settings: undo send, rules, blocked senders, automatic replies"
+      aria-label="Mail settings"
+      className="flex h-8 items-center gap-1.5 rounded px-2.5 text-[13px] text-fg hover:bg-bg-muted"
+    >
+      <Settings2 className="h-4 w-4 text-accent" />
+    </button>
   );
 }

@@ -10,10 +10,10 @@ export function useToasts() {
   }, []);
 
   const push = useCallback(
-    (message: string, actionLabel?: string, onAction?: () => void) => {
+    (message: string, actionLabel?: string, onAction?: () => void, ms = 6000) => {
       const id = `t${idRef.current++}`;
       setToasts((prev) => [...prev, { id, message, actionLabel, onAction }]);
-      window.setTimeout(() => dismiss(id), 6000);
+      window.setTimeout(() => dismiss(id), ms);
       return id;
     },
     [dismiss],
