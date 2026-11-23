@@ -1,6 +1,6 @@
 # Zero-access encryption: Stage 0 spec
 
-Status: Stages 1 to 4 (keys, encrypted inbound, write paths, contacts/events/tasks/drafts/attachments/search) are built and tested. Stage 5 (migrate old data, remove plaintext, harden) is not started.
+Status: Stages 1 to 4 (keys, encrypted inbound, write paths, contacts/events/tasks/drafts/attachments/search) are built and tested. Stage 5 is partly built: the in-browser migration of old data and the lockout tests are done; removing the plaintext columns, the legacy sign-in and key rotation are gated (see "Stage 5 as built").
 
 ## 1. The claim
 
@@ -105,6 +105,23 @@ Known limits of Stage 4:
 - Attachments go only to Typhoonpost recipients. The outside mail path carries message text, so a message with attachments to an outside address is not sent and the person is told why. Attachments on incoming outside mail are still names and sizes only; storing them needs the inbound function to fetch and encrypt each file, which depends on the Resend setup.
 - Deleting a draft or a sent message from the Deleted Items folder does not yet delete its stored attachment files (they stay as unreadable ciphertext until the account is deleted).
 - Lookup reveals whether an address exists, and storage reveals the number and approximate size of a person's files.
+
+### Stage 5 as built
+
+Shipped:
+- `src/lib/migrate.ts` runs after sign-in, once the key is in memory. It finds rows with `enc_version is null` (emails, contacts, events), encrypts them to the user's own public key, writes the encrypted fields, and blanks the readable columns in the same update. Legacy attachment rows are deleted. Failures are counted and retried on the next sign-in; a second run touches nothing.
+- Fail-closed tests: the key lives only in memory and sessionStorage, a locked tab shows no content, repeated wrong passwords stay locked, a damaged key blob fails closed, sign-out clears the key.
+- `scripts/inspect-plaintext.sql`: read-only counts of rows and accounts that still hold readable content.
+
+Gated, not done:
+- Removing the plaintext columns: `supabase/pending/20261124000000_drop_plaintext_columns.sql` is prepared and not applied. It refuses to run while any unencrypted row remains. Needs both accounts to sign in with the new client first.
+- `LEGACY_PASSWORD_LOGIN` stays true until the account without keys has signed in once.
+- Key rotation: deferred. The public key is immutable by trigger. Design: an edge function that checks the current auth secret, then allows a public-key change while a resumable re-seal runs and the old key stays wrapped until it finishes.
+- Outside security review, and the "zero-access" claim on the website, wait for the column drop and the review.
+
+Limits that remain: database backups keep old plaintext until they expire and cannot be purged from here; profile display name and signature stay readable; attachments to external recipients are unsupported.
+
+Live state when written: 36 emails and 30 contacts unencrypted across two accounts, one account without keys.
 
 ## 6. Consequences to design for
 

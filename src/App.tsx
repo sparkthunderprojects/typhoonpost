@@ -60,6 +60,7 @@ import {
 } from '@/lib/db';
 import { contactMatches, emailMatches, eventMatches, filterBy } from '@/lib/search';
 import { TasksView } from '@/components/TasksView';
+import { migrateLegacyData, type MigrationResult } from '@/lib/migrate';
 import type { PayloadAttachment } from '@/lib/crypto/envelope';
 import { AuthScreen } from '@/components/AuthScreen';
 import { sendMessage } from '@/lib/outgoing';
@@ -157,6 +158,13 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
       setDataError(null);
       try {
         await seedAccountIfEmpty(userId);
+        // Anything stored before encryption existed is encrypted here, in the browser.
+        let migrated: MigrationResult | null = null;
+        try {
+          migrated = await migrateLegacyData();
+        } catch {
+          /* the next visit tries again; unconverted items still display */
+        }
         const [loadedEmails, loadedContacts, loadedSignature, loadedEvents, loadedTasks] = await Promise.all([
           fetchEmailsForUser(),
           fetchContactsForUser(),
@@ -171,6 +179,11 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
         setEvents(loadedEvents);
         setTasks(loadedTasks);
         setActiveId(loadedEmails.find((e) => e.folder === 'inbox')?.id ?? loadedEmails[0]?.id ?? null);
+        if (migrated) {
+          const n = migrated.emails + migrated.contacts + migrated.events;
+          if (n > 0) push(`Encrypted ${n} older item${n === 1 ? '' : 's'} in your account`);
+          if (migrated.failed > 0) push(`${migrated.failed} older item${migrated.failed === 1 ? '' : 's'} could not be encrypted yet and will be retried`);
+        }
       } catch (err) {
         if (cancelled) return;
         setDataError(err instanceof Error ? err.message : 'Failed to load your mailbox');

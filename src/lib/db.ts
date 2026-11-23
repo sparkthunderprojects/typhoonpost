@@ -47,7 +47,7 @@ interface AttachmentRow {
   file?: PayloadAttachment['file'];
 }
 
-interface ContactRow {
+export interface ContactRow {
   id: string;
   first_name: string;
   last_name: string;
@@ -177,7 +177,7 @@ function rowToEmail(input: EmailRow): Email {
 
 const contactCache = new Map<string, Contact>();
 
-function rowToContact(row: ContactRow): Contact {
+export function rowToContact(row: ContactRow): Contact {
   const createdAt = row.created_at.slice(0, 10);
   let c: Contact;
   if (row.enc_version != null && row.enc_payload && row.enc_key) {
@@ -221,7 +221,7 @@ function openRecord<T>(
   return decryptRecord<T>(kind, { version: row.enc_version!, payload: row.enc_payload!, key: row.enc_key! }, key);
 }
 
-function sealRecord(kind: 'contact' | 'event' | 'task', value: unknown) {
+export function sealRecord(kind: 'contact' | 'event' | 'task', value: unknown) {
   const enc: EncryptedRecord = encryptRecord(kind, value, ownPublicKey());
   return { enc_version: enc.version, enc_payload: enc.payload, enc_key: enc.key };
 }
@@ -304,7 +304,7 @@ function encryptedEmailRow(userId: string, email: NewEmail, recipientPublicKey: 
   };
 }
 
-function ownPublicKey(): Uint8Array {
+export function ownPublicKey(): Uint8Array {
   const key = getPrivateKey();
   if (!key) throw new Error('Your mailbox is locked. Sign in again to continue.');
   return publicKeyOf(key);
@@ -366,7 +366,7 @@ export async function insertContact(
   return rowToContact(data as ContactRow);
 }
 
-function pickContact(c: ContactPayload): ContactPayload {
+export function pickContact(c: ContactPayload): ContactPayload {
   return {
     firstName: c.firstName, lastName: c.lastName, email: c.email, phone: c.phone, jobTitle: c.jobTitle,
     company: c.company, avatarColor: c.avatarColor, notes: c.notes, groups: c.groups, starred: c.starred,
@@ -412,7 +412,7 @@ export async function restoreContact(userId: string, c: Contact): Promise<Contac
 // Calendar events
 // ---------------------------------------------------------------------------
 
-interface EventRow {
+export interface EventRow {
   id: string;
   title: string;
   description: string;
@@ -426,7 +426,7 @@ interface EventRow {
   enc_key?: string | null;
 }
 
-function rowToEvent(row: EventRow): CalendarEvent {
+export function rowToEvent(row: EventRow): CalendarEvent {
   if (row.enc_version != null && row.enc_payload && row.enc_key) {
     try {
       const key = getPrivateKey();
@@ -457,7 +457,7 @@ export async function fetchEventsForUser(): Promise<CalendarEvent[]> {
   return (data as EventRow[]).map(rowToEvent).sort((a, b) => a.start.localeCompare(b.start));
 }
 
-function eventPayload(e: Omit<CalendarEvent, 'id'>): Omit<CalendarEvent, 'id'> {
+export function eventPayload(e: Omit<CalendarEvent, 'id'>): Omit<CalendarEvent, 'id'> {
   return { title: e.title, description: e.description, location: e.location, start: e.start, end: e.end, allDay: e.allDay, color: e.color };
 }
 
