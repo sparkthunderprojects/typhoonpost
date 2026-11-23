@@ -1,4 +1,4 @@
-export type FolderId =
+export type BuiltInFolderId =
   | 'inbox'
   | 'starred'
   | 'sent'
@@ -8,7 +8,13 @@ export type FolderId =
   | 'spam'
   | 'snoozed';
 
-export type LabelId = 'work' | 'personal' | 'urgent' | 'finance';
+/** A built-in folder, or one of the person's own (`f:` plus an id). Names of the latter are encrypted. */
+export type FolderId = BuiltInFolderId | `f:${string}`;
+
+/** One of the four built-in categories, or a custom one (`c:` plus an id). */
+export type LabelId = string;
+
+export const isCustomFolder = (id: string): id is `f:${string}` => id.startsWith('f:');
 
 export type FilterTab = 'all' | 'unread' | 'starred';
 
@@ -55,6 +61,8 @@ export interface Email {
   /** ISO timestamp the message was received/sent (used for date grouping). */
   createdAt?: string;
   toAddresses?: string[];
+  pinned?: boolean;
+  followUpAt?: string;
 }
 
 export interface ToastItem {
@@ -77,7 +85,7 @@ export const LABEL_DEFS: LabelDef[] = [
   { id: 'finance', name: 'Finance', color: '#16a34a' },
 ];
 
-export const FOLDER_NAMES: Record<FolderId, string> = {
+export const FOLDER_NAMES: Record<BuiltInFolderId, string> = {
   inbox: 'Inbox',
   starred: 'Flagged',
   sent: 'Sent Items',

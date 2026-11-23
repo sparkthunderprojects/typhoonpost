@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import type { Email, FolderId, LabelId } from '@/types';
 import { FOLDER_NAMES } from '@/types';
+import { folderTree, usePrefs } from '@/lib/prefs';
 import { SnoozeMenu, type SnoozeOption } from '@/components/SnoozeMenu';
 import { LabelPicker } from '@/components/LabelPicker';
 
@@ -36,7 +37,7 @@ interface CommandBarProps {
   onToggleLabel: (label: LabelId) => void;
 }
 
-const MOVE_TARGETS: { id: FolderId; Icon: typeof Inbox }[] = [
+const MOVE_TARGETS: { id: keyof typeof FOLDER_NAMES; Icon: typeof Inbox }[] = [
   { id: 'inbox', Icon: Inbox },
   { id: 'archive', Icon: Archive },
   { id: 'spam', Icon: ShieldAlert },
@@ -99,6 +100,7 @@ export function CommandBar({
   onSnooze,
   onToggleLabel,
 }: CommandBarProps) {
+  const prefs = usePrefs();
   const [moveOpen, setMoveOpen] = useState(false);
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [labelOpen, setLabelOpen] = useState(false);
@@ -139,6 +141,18 @@ export function CommandBar({
                 >
                   <Icon className="h-4 w-4 text-fg-muted" />
                   {FOLDER_NAMES[id]}
+                </button>
+              ))}
+              {folderTree(prefs).length > 0 && <div className="my-1 border-t border-line" />}
+              {folderTree(prefs).map(({ folder, depth }) => (
+                <button
+                  key={folder.id}
+                  onClick={() => { onMove(`f:${folder.id}`); setMoveOpen(false); }}
+                  style={{ paddingLeft: 12 + depth * 12 }}
+                  className="flex w-full items-center gap-2.5 py-2 pr-3 text-left text-sm text-fg hover:bg-bg-muted"
+                >
+                  <FolderInput className="h-4 w-4" style={{ color: folder.color }} />
+                  {folder.name}
                 </button>
               ))}
             </div>

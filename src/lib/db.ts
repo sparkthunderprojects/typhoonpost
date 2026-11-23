@@ -28,6 +28,8 @@ interface EmailRow {
   starred: boolean;
   has_replies: boolean;
   snoozed_until: string | null;
+  pinned?: boolean;
+  follow_up_at?: string | null;
   created_at: string;
   to_addresses?: string[] | null;
   attachments?: AttachmentRow[];
@@ -170,6 +172,8 @@ function rowToEmail(input: EmailRow): Email {
     ),
     hasReplies: row.has_replies,
     snoozedUntil: row.snoozed_until ?? undefined,
+    pinned: row.pinned ?? false,
+    followUpAt: row.follow_up_at ?? undefined,
     createdAt: row.created_at,
     toAddresses: row.to_addresses ?? [],
   };
@@ -326,6 +330,8 @@ export type EmailPatch = Partial<{
   folder: FolderId;
   labels: LabelId[];
   snoozedUntil: string | null;
+  pinned: boolean;
+  followUpAt: string | null;
 }>;
 
 export async function updateEmail(id: string, patch: EmailPatch): Promise<void> {
@@ -335,6 +341,8 @@ export async function updateEmail(id: string, patch: EmailPatch): Promise<void> 
   if (patch.folder !== undefined) dbPatch.folder = patch.folder;
   if (patch.labels !== undefined) dbPatch.labels = patch.labels;
   if (patch.snoozedUntil !== undefined) dbPatch.snoozed_until = patch.snoozedUntil;
+  if (patch.pinned !== undefined) dbPatch.pinned = patch.pinned;
+  if (patch.followUpAt !== undefined) dbPatch.follow_up_at = patch.followUpAt;
   const { error } = await supabase.from('emails').update(dbPatch).eq('id', id);
   if (error) throw error;
 }
@@ -344,6 +352,7 @@ export async function updateEmailsBulk(ids: string[], patch: EmailPatch): Promis
   if (patch.read !== undefined) dbPatch.read = patch.read;
   if (patch.starred !== undefined) dbPatch.starred = patch.starred;
   if (patch.folder !== undefined) dbPatch.folder = patch.folder;
+  if (patch.pinned !== undefined) dbPatch.pinned = patch.pinned;
   const { error } = await supabase.from('emails').update(dbPatch).in('id', ids);
   if (error) throw error;
 }

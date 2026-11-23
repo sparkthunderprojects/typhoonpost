@@ -3,6 +3,7 @@ import { Inbox, PanelLeftClose, PanelLeft, CheckSquare, Trash2, Mail, Archive, L
 import type { Email, FilterTab, Category } from '@/types';
 import { EmailListItem } from '@/components/EmailListItem';
 import { Logo } from '@/components/Logo';
+import { startMailDrag } from '@/lib/dnd';
 
 interface EmailListProps {
   emails: Email[];
@@ -17,6 +18,7 @@ interface EmailListProps {
   onQuickDelete: (id: string) => void;
   onQuickMarkUnread: (id: string) => void;
   onQuickSnooze: (e: React.MouseEvent, id: string) => void;
+  onTogglePin: (id: string) => void;
   folderName: string;
   onClearSelection: () => void;
   onSelectAll: () => void;
@@ -55,6 +57,7 @@ export function EmailList({
   onQuickDelete,
   onQuickMarkUnread,
   onQuickSnooze,
+  onTogglePin,
   folderName,
   onClearSelection,
   onSelectAll,
@@ -196,6 +199,8 @@ export function EmailList({
                   onQuickDelete={() => onQuickDelete(email.id)}
                   onQuickMarkUnread={() => onQuickMarkUnread(email.id)}
                   onQuickSnooze={(e) => onQuickSnooze(e, email.id)}
+                  onTogglePin={() => onTogglePin(email.id)}
+                  onDragStart={(e) => startMailDrag(e, selectedIds.has(email.id) ? [...selectedIds] : [email.id])}
                 />
               ))}
             </div>

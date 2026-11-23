@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { Check, Tag, X } from 'lucide-react';
-import { LABEL_DEFS, type LabelId } from '@/types';
+import type { LabelId } from '@/types';
+import { categoryDefs, usePrefs } from '@/lib/prefs';
 
 interface LabelPickerProps {
   open: boolean;
@@ -10,6 +11,7 @@ interface LabelPickerProps {
 }
 
 export function LabelPicker({ open, onClose, current, onToggle }: LabelPickerProps) {
+  const prefs = usePrefs();
   return (
     <AnimatePresence>
       {open && (
@@ -30,7 +32,7 @@ export function LabelPicker({ open, onClose, current, onToggle }: LabelPickerPro
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
-            {LABEL_DEFS.map((l) => {
+            {categoryDefs(prefs).map((l) => {
               const active = current.includes(l.id);
               return (
                 <button

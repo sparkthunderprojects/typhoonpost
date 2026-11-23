@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import { Reply, Paperclip, Clock, MailOpen } from 'lucide-react';
 import type { Email, Contact, Attachment } from '@/types';
-import { LABEL_DEFS } from '@/types';
+import { categoryDef, usePrefs } from '@/lib/prefs';
 import { Avatar } from '@/components/Avatar';
 import { AttachmentIcon } from '@/components/AttachmentIcon';
 import { SenderHoverCard, isSenderSaved } from '@/components/SenderHoverCard';
@@ -24,6 +24,7 @@ export function EmailReader({
   onDownloadAttachment,
   onEditDraft,
 }: EmailReaderProps) {
+  const prefs = usePrefs();
   return (
     <section className="flex h-full w-[42%] min-w-[380px] max-w-[640px] flex-1 flex-col bg-bg-subtle">
       <AnimatePresence mode="wait">
@@ -46,7 +47,7 @@ export function EmailReader({
                 {email.labels.length > 0 && (
                   <div className="mt-2 flex items-center gap-1.5">
                     {email.labels.map((l) => {
-                      const def = LABEL_DEFS.find((d) => d.id === l);
+                      const def = categoryDef(l, prefs);
                       return (
                         <span
                           key={l}

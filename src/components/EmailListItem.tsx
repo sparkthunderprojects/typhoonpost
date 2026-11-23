@@ -1,7 +1,7 @@
 import { motion } from 'framer-motion';
-import { Flag, Paperclip, Reply, Archive, Trash2, Mail, Clock } from 'lucide-react';
+import { Flag, Paperclip, Reply, Archive, Trash2, Mail, Clock, Pin } from 'lucide-react';
 import type { Email } from '@/types';
-import { LABEL_DEFS } from '@/types';
+import { categoryDef, usePrefs } from '@/lib/prefs';
 import { Avatar } from '@/components/Avatar';
 
 interface EmailListItemProps {
@@ -15,6 +15,8 @@ interface EmailListItemProps {
   onQuickDelete: () => void;
   onQuickMarkUnread: () => void;
   onQuickSnooze: (e: React.MouseEvent) => void;
+  onTogglePin: () => void;
+  onDragStart: (e: React.DragEvent) => void;
 }
 
 export function EmailListItem({
@@ -28,9 +30,14 @@ export function EmailListItem({
   onQuickDelete,
   onQuickMarkUnread,
   onQuickSnooze,
+  onTogglePin,
+  onDragStart,
 }: EmailListItemProps) {
+  const prefs = usePrefs();
   return (
     <div
+      draggable
+      onDragStart={onDragStart}
       onClick={onOpen}
       className={`group relative flex cursor-pointer gap-3 border-b border-line px-4 py-3 transition-colors ${
         active ? 'bg-accent-soft/60' : 'hover:bg-bg-muted/60'
@@ -68,6 +75,7 @@ export function EmailListItem({
               ? `To: ${email.toAddresses.join(', ')}`
               : email.sender}
           </span>
+          {email.pinned && <Pin className="h-3 w-3 shrink-0 fill-current text-accent" aria-label="Pinned" />}
           {email.snoozedUntil && (
             <span className="flex shrink-0 items-center gap-1 rounded-full bg-warning/10 px-1.5 py-0.5 text-2xs font-medium text-warning">
               <Clock className="h-2.5 w-2.5" />
@@ -101,7 +109,7 @@ export function EmailListItem({
         {email.labels.length > 0 && (
           <div className="mt-1.5 flex items-center gap-1">
             {email.labels.map((l) => {
-              const def = LABEL_DEFS.find((d) => d.id === l);
+              const def = categoryDef(l, prefs);
               return (
                 <span
                   key={l}
@@ -139,6 +147,9 @@ export function EmailListItem({
 
       {/* Hover quick actions */}
       <div className="absolute bottom-2.5 right-3 flex items-center gap-0.5 rounded-lg border border-line bg-bg-subtle/95 p-0.5 opacity-0 shadow-soft backdrop-blur transition-opacity group-hover:opacity-100">
+        <QuickBtn title={email.pinned ? 'Unpin' : 'Pin to top'} onClick={(e) => { e.stopPropagation(); onTogglePin(); }}>
+          <Pin className={`h-3.5 w-3.5 ${email.pinned ? 'fill-current text-accent' : ''}`} />
+        </QuickBtn>
         <QuickBtn title="Archive" onClick={(e) => { e.stopPropagation(); onQuickArchive(); }}>
           <Archive className="h-3.5 w-3.5" />
         </QuickBtn>

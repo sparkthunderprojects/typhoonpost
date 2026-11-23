@@ -5,6 +5,7 @@ import {
   Flag,
   Send,
   FileText,
+  Folder as FolderIcon,
   Archive,
   Trash2,
   ShieldAlert,
@@ -23,7 +24,8 @@ import {
   CheckSquare,
 } from 'lucide-react';
 import type { Email, FolderId, LabelId, FilterTab, Category, AppView, Contact, ContactGroup, CalendarEvent, Task, Attachment } from '@/types';
-import { FOLDER_NAMES, LABEL_DEFS, contactName } from '@/types';
+import { contactName } from '@/types';
+import { categoryDefs, folderName, folderTree, loadPrefs, resetPrefs, usePrefs } from '@/lib/prefs';
 import { useTheme } from '@/hooks/useTheme';
 import { useToasts } from '@/hooks/useToasts';
 import { useAuth } from '@/hooks/useAuth';
@@ -103,6 +105,7 @@ interface MailAppProps {
 function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProps) {
   const { theme, toggle } = useTheme();
   const { toasts, push, dismiss } = useToasts();
+  const prefs = usePrefs();
 
   // ---- Mail state ----
   const [emails, setEmails] = useState<Email[]>([]);
@@ -158,6 +161,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
     (async () => {
       setDataLoading(true);
       setDataError(null);
+      resetPrefs();
       try {
         await seedAccountIfEmpty(userId);
         // Anything stored before encryption existed is encrypted here, in the browser.
@@ -174,6 +178,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
           fetchEventsForUser(),
           fetchTasksForUser(),
         ]);
+        await loadPrefs().catch(() => undefined);
         if (cancelled) return;
         setEmails(loadedEmails);
         setContacts(loadedContacts);
@@ -239,6 +244,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
     if (filter === 'unread') list = list.filter((e) => !e.read);
     if (filter === 'starred') list = list.filter((e) => e.starred);
     list = filterBy(list, query, emailMatches);
+    if (list.some((e) => e.pinned)) list = [...list.filter((e) => e.pinned), ...list.filter((e) => !e.pinned)];
     return list;
   }, [emails, activeFolder, activeLabel, category, filter, query]);
 
@@ -249,18 +255,9 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
 
   // ---- Mail counts ----
   const counts = useMemo(() => {
-    const c: Record<FolderId, number> = {
-      inbox: 0,
-      starred: 0,
-      sent: 0,
-      drafts: 0,
-      archive: 0,
-      trash: 0,
-      spam: 0,
-      snoozed: 0,
-    };
+    const c: Record<string, number> = { inbox: 0, starred: 0, sent: 0, drafts: 0, archive: 0, trash: 0, spam: 0, snoozed: 0 };
     for (const e of emails) {
-      if (!e.read) c[e.folder]++;
+      if (!e.read) c[e.folder] = (c[e.folder] ?? 0) + 1;
     }
     c.starred = emails.filter((e) => e.starred).length;
     c.snoozed = emails.filter((e) => e.folder === 'snoozed').length;
@@ -268,9 +265,9 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
   }, [emails]);
 
   const labelCounts = useMemo(() => {
-    const c: Record<LabelId, number> = { work: 0, personal: 0, urgent: 0, finance: 0 };
+    const c: Record<string, number> = {};
     for (const e of emails) {
-      if (!e.read) for (const l of e.labels) c[l]++;
+      if (!e.read) for (const l of e.labels) c[l] = (c[l] ?? 0) + 1;
     }
     return c;
   }, [emails]);
@@ -413,7 +410,7 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
       if (!email || email.folder === folder) return;
       setEmails((prev) => prev.map((e) => (e.id === id ? { ...e, folder, snoozedUntil: undefined } : e)));
       dbUpdateEmail(id, { folder }).catch(() => {});
-      push(`Moved to ${FOLDER_NAMES[folder]}`, 'Undo', () => {
+      push(`Moved to ${folderName(folder)}`, 'Undo', () => {
         setEmails((prev) => prev.map((e) => (e.id === id ? { ...email } : e)));
         dbUpdateEmail(id, { folder: email.folder }).catch(() => {});
       });
@@ -422,6 +419,59 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [emails, activeId, push],
   );
+
+  /** Drop or bulk move: any number of messages into any folder, with one undo. */
+  const moveMany = useCallback(
+    (ids: string[], folder: FolderId) => {
+      const picked = emails.filter((e) => ids.includes(e.id) && e.folder !== folder);
+      if (!picked.length) return;
+      const before = new Map(picked.map((e) => [e.id, e]));
+      setEmails((prev) => prev.map((e) => (before.has(e.id) ? { ...e, folder, snoozedUntil: undefined } : e)));
+      updateEmailsBulk(picked.map((e) => e.id), { folder }).catch(() => {});
+      push(`Moved ${picked.length === 1 ? '1 message' : `${picked.length} messages`} to ${folderName(folder)}`, 'Undo', () => {
+        setEmails((prev) => prev.map((e) => before.get(e.id) ?? e));
+        for (const e of picked) dbUpdateEmail(e.id, { folder: e.folder, snoozedUntil: e.snoozedUntil ?? null }).catch(() => {});
+      });
+      setSelectedIds(new Set());
+      if (activeId && before.has(activeId)) setActiveId(null);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [emails, activeId, push],
+  );
+
+  const addLabelMany = useCallback(
+    (ids: string[], label: LabelId) => {
+      const picked = emails.filter((e) => ids.includes(e.id) && !e.labels.includes(label));
+      if (!picked.length) return;
+      setEmails((prev) => prev.map((e) => (picked.some((p) => p.id === e.id) ? { ...e, labels: [...e.labels, label] } : e)));
+      for (const e of picked) dbUpdateEmail(e.id, { labels: [...e.labels, label] }).catch(() => {});
+      push(`Categorised ${picked.length === 1 ? '1 message' : `${picked.length} messages`}`, 'Undo', () => {
+        setEmails((prev) => prev.map((e) => picked.find((p) => p.id === e.id) ?? e));
+        for (const e of picked) dbUpdateEmail(e.id, { labels: e.labels }).catch(() => {});
+      });
+    },
+    [emails, push],
+  );
+
+  const folderDeleted = useCallback(
+    (folderIds: FolderId[]) => {
+      const ids = emails.filter((e) => folderIds.includes(e.folder)).map((e) => e.id);
+      if (!ids.length) return;
+      setEmails((prev) => prev.map((e) => (ids.includes(e.id) ? { ...e, folder: 'inbox' } : e)));
+      updateEmailsBulk(ids, { folder: 'inbox' }).catch(() => {});
+    },
+    [emails],
+  );
+
+  const togglePin = useCallback((id: string) => {
+    setEmails((prev) =>
+      prev.map((e) => {
+        if (e.id !== id) return e;
+        dbUpdateEmail(id, { pinned: !e.pinned }).catch(() => {});
+        return { ...e, pinned: !e.pinned };
+      }),
+    );
+  }, []);
 
   const snoozeEmail = useCallback(
     (id: string, opt: SnoozeOption) => {
@@ -926,14 +976,18 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
     { id: 'new-event', group: 'Actions', label: 'New calendar event', Icon: CalendarPlus, run: () => { setView('calendar'); openNewEvent(new Date().toISOString()); } },
     { id: 'new-task', group: 'Actions', label: 'New task', Icon: CheckSquare, run: () => handleViewChange('tasks') },
     { id: 'new-contact', group: 'Actions', label: 'New contact', Icon: UserPlus, run: () => { setView('contacts'); setEditingContact(null); setContactFormOpen(true); } },
-    ...(['inbox', 'sent', 'drafts', 'trash', 'spam', 'archive', 'snoozed', 'starred'] as FolderId[]).map((f) => ({
+    ...(['inbox', 'sent', 'drafts', 'trash', 'spam', 'archive', 'snoozed', 'starred'] as const).map((f) => ({
       id: `go-${f}`,
       group: 'Go to folder',
-      label: FOLDER_NAMES[f],
+      label: folderName(f),
       Icon: { inbox: Inbox, sent: Send, drafts: FileText, trash: Trash2, spam: ShieldAlert, archive: Archive, snoozed: Clock, starred: Flag }[f],
       run: () => handleFolderChange(f),
     })),
-    ...LABEL_DEFS.map((l) => ({ id: `cat-${l.id}`, group: 'Categories', label: l.name, Icon: Tag, keywords: 'category label', run: () => handleLabelToggle(l.id) })),
+    ...folderTree(prefs).map(({ folder }) => ({
+      id: `go-f-${folder.id}`, group: 'Go to folder', label: folder.name, Icon: FolderIcon, keywords: 'my folder',
+      run: () => handleFolderChange(`f:${folder.id}`),
+    })),
+    ...categoryDefs(prefs).map((l) => ({ id: `cat-${l.id}`, group: 'Categories', label: l.name, Icon: Tag, keywords: 'category label', run: () => handleLabelToggle(l.id) })),
     { id: 'view-mail', group: 'Switch app', label: 'Mail', Icon: Mail, run: () => handleViewChange('mail') },
     { id: 'view-calendar', group: 'Switch app', label: 'Calendar', Icon: CalendarDays, run: () => handleViewChange('calendar') },
     { id: 'view-docs', group: 'Switch app', label: 'Docs', Icon: FileText, keywords: 'documents word processor write letter', run: () => handleViewChange('docs') },
@@ -1001,6 +1055,9 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
         activeLabel={activeLabel}
         onLabelToggle={handleLabelToggle}
         labelCounts={labelCounts}
+        onDropMail={moveMany}
+        onDropLabel={addLabelMany}
+        onFolderDeleted={folderDeleted}
         view={view}
         userEmail={userEmail}
         contactCount={contacts.length}
@@ -1041,8 +1098,9 @@ function MailApp({ userId, userEmail, onSignOut, onChangePassword }: MailAppProp
             onQuickArchive={archiveEmail}
             onQuickDelete={deleteEmail}
             onQuickMarkUnread={markUnread}
+            onTogglePin={togglePin}
             onQuickSnooze={handleQuickSnooze}
-            folderName={activeLabel ? `Category: ${LABEL_DEFS.find((d) => d.id === activeLabel)?.name ?? activeLabel}` : FOLDER_NAMES[activeFolder]}
+            folderName={activeLabel ? `Category: ${categoryDefs(prefs).find((d) => d.id === activeLabel)?.name ?? 'Category'}` : folderName(activeFolder, prefs)}
             onClearSelection={() => setSelectedIds(new Set())}
             onSelectAll={selectAll}
             onBulkMarkRead={bulkMarkRead}
